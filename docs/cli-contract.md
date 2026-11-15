@@ -15,7 +15,7 @@ chanorbit --version | -V             # "chanorbit <version> schemas <geometry sc
 chanorbit --help | -h
 ```
 
-`geometry` answers with the structure snapshot of the last input; `stages` replays the inputs and answers with the confirmed buy-side stages and their observation. Both take the same request and follow the same batch, error and exit-code rules.
+`geometry` answers with the structure snapshot of the last input; `stages` replays the inputs and answers with the confirmed buy-side stages and their observation. Both take the same request fields and input checks, except `observe_from`, which only `stages` accepts; both follow the same batch, error and exit-code rules.
 
 `--jobs` is accepted only together with `--batch`; alone, or with a value that is not a positive integer, it is a command-line error (exit 2).
 
@@ -35,7 +35,7 @@ Exactly one JSON object; any other JSON value (for example a positional array) i
 | `dt` | string array | Exactly `YYYY-MM-DDTHH:MM:SS`: exchange-local wall clock, zero-padded, no fraction, no zone, no surrounding spaces, a real calendar time (no `:60`) |
 | `high`, `low`, `close` | number arrays | Finite prices in `(0, 1e9]`, in the caller's units |
 | `vol` | number array | Finite volume in `[0, 1e15]`, in the caller's units; checked by `stages` too, though no stage fact uses it |
-| `observe_from` | string, `stages` only, optional | `YYYY-MM-DDTHH:MM:SS`; observation starts at the first input at or after it ([structure contract](structure-contract.md#observation)). Malformed: `invalid_request`; present in a `geometry` request: `invalid_request` |
+| `observe_from` | string, `stages` only, optional | `YYYY-MM-DDTHH:MM:SS`; observation starts at the first input at or after it ([structure contract](structure-contract.md#observation)). Malformed or `null`: `invalid_request`; present in a `geometry` request, `null` included: `invalid_request` |
 
 - Length: 1 to 200,000 bars per request; more is an `invalid_input` error.
 - Unknown fields are rejected; a repeated key is an `invalid_request` error.
@@ -81,4 +81,4 @@ stdout carries only contract JSON, one object per line. stderr carries human-rea
 
 ## Versioning
 
-Each command has its own schema string; it changes when one of that command's fields is removed, renamed or changes meaning. Adding fields keeps it. `--version` and every response carry them; the package version is in `Cargo.toml`.
+Each command has its own schema string; it changes when one of that command's fields is removed, renamed or changes meaning. Adding fields keeps it. `--version` and every response carry them; the package version is in `Cargo.toml`. Before the first release the schema strings are not bumped: they are fixed from the first release on.

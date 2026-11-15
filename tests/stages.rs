@@ -57,6 +57,13 @@ fn baselines_match_field_by_field() {
                 "within"
             };
             seen_states.insert(format!("{}/{after}", s["kind"]));
+            if s["first_known_at"].is_null() {
+                seen_states.insert(format!("{}/first_known_null", s["kind"]));
+            }
+        }
+        let dt = case["request"]["dt"].as_array().unwrap();
+        if dt.windows(2).any(|w| w[0] == w[1]) {
+            seen_states.insert("revised_input".into());
         }
         failed |= !diff.mismatches.is_empty();
         report.push(format!(
@@ -78,6 +85,12 @@ fn baselines_match_field_by_field() {
         "\"second_like\"/within",
         "\"second\"/beyond_start",
         "\"second\"/withdrawn_rebound",
+        "\"second_like\"/beyond_start",
+        "\"second_like\"/withdrawn_rebound",
+        "\"second\"/first_known_null",
+        "\"third\"/first_known_null",
+        "\"second_like\"/first_known_null",
+        "revised_input",
     ] {
         assert!(seen_states.contains(want), "no baseline covers {want}");
     }

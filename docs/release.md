@@ -1,6 +1,6 @@
 # Release
 
-The package version is in `Cargo.toml`; the output schema string is `contract::SCHEMA` (see [cli-contract.md](cli-contract.md#versioning)). Release notes are in `CHANGELOG.md`.
+The package version is in `Cargo.toml`; the output schema strings are `contract::SCHEMA` (`geometry`) and `contract::STAGES_SCHEMA` (`stages`) (see [cli-contract.md](cli-contract.md#versioning)). Release notes are in `CHANGELOG.md`.
 
 ## Build
 

@@ -138,7 +138,8 @@ Notation: `S` is the retained stroke list, `n` its length, `F` the finished coun
 
 A stage's history comes from replaying the request one input at a time with the same analyzer; nothing is inferred backwards.
 
-- **Observed inputs.** Each input time is observed once, after its last version (a revision replaces the earlier version before observation). Observation starts at the first input with `dt ≥ observe_from`, or at the first input when `observe_from` is absent; earlier inputs only build state.
+- **Revisions.** Each `dt` is observed once, after its last version. An earlier version of a time is never observed: it records no first-known time and takes part in no withdrawal. A `stages` request carrying revisions therefore answers exactly as the same request holding only the last version of each `dt`. There is no notion of revising an input that was already observed.
+- **Observed inputs.** Observation starts at the first input with `dt ≥ observe_from`, or at the first input when `observe_from` is absent; earlier inputs only build state. When no input is observed (`observe_from` after the last input), every `first_known_at` and `stage_age` is `null` and no withdrawal is recorded.
 - **Same stage.** Kind, the centre's `zd`, `zg` and first three members, and every role stroke (entry, departure, rebound, first-point anchor, retest, parent rebound and retest). Strokes compare by direction, `start_at`, `end_at`, start and end price, high and low. A centre taking more members keeps the stage; any role stroke changing — the retest reaching a new low, for example — makes a new stage.
 - **`first_known_at`.** The first observed input at which the same stage stood. A stage already standing at the first observed input has `null`: it began before observation. The time is kept even if the stage disappears and comes back.
 - **`stage_age`.** Observed inputs after `first_known_at` up to the last input (0 when first known at the last input); `null` with `first_known_at`.
@@ -146,7 +147,7 @@ A stage's history comes from replaying the request one input at a time with the 
 - **`withdrawn_rebound`.** When the stage's retest has the `end_at` and low of such a `D`: the latest withdrawn `U` (`start_at`, `end_at`, `high`, `low`), `observed_at` — the observed input from which that version of `U` was the last stroke — and `withdrawn_at` — the observed input at which it was withdrawn. Otherwise `null`.
 - **`beyond_start`**, at the last input: the candidate stroke is available, of kind `reverse`, and its `end_price` is above the retest's high — the move after the retest has passed the retest's start. Independent of `withdrawn_rebound`; both can hold.
 
-Per observed input the engine evaluates the three stages once: the centre sequence over at most `max_strokes` strokes up to three times, path guards over the retained raw bars, and MACD over the retained raw bars only when a first point's geometry holds. A request of `m` inputs costs `O(m · (s + r))` for `s` retained strokes and `r` retained raw bars.
+Per observed input the engine evaluates the three stages once: the centre sequence over at most `max_strokes` strokes up to four times (second through its first point, third, second-like, and second-like's parent second through its first point), path guards over the retained raw bars with a binary search per NewBar element, and MACD over the retained raw bars only when a first point's geometry holds. A request of `m` inputs costs `O(m · (s + r log r))` for `s` retained strokes and `r` retained raw bars.
 
 ## Stages output
 

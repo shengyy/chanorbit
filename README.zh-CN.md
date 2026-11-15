@@ -27,7 +27,7 @@ echo '{"id":"demo","dt":["2026-03-02T15:00:00","2026-03-03T15:00:00"],
 target/release/chanorbit geometry --batch < requests.jsonl > responses.jsonl
 ```
 
-`chanorbit stages` 接受同样的请求，返回最后一根 K 线时已确认的二买、三买与类二买，各带中枢、角色笔、首知时刻、阶段年龄与回试之后的状态。
+`chanorbit stages` 接受同样的请求字段，外加可选的 `observe_from`，返回最后一根 K 线时已确认的二买、三买与类二买，各带中枢、角色笔、首知时刻、阶段年龄与回试之后的状态。
 
 请求、响应、错误与退出码见 [docs/cli-contract.md](docs/cli-contract.md)；各对象定义见 [docs/structure-contract.md](docs/structure-contract.md)。
 

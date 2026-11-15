@@ -2,7 +2,7 @@
 name = "chanorbit"
 version = "0.1.0"
 edition = "2024"
-rust-version = "1.85"
+rust-version = "1.88"
 description = "Lightweight Chan-theory structure engine: inclusion, fractals, strokes, stroke centres and MACD interval power"
 publish = false
 

@@ -39,9 +39,14 @@ pub struct Request {
     pub low: Vec<f64>,
     pub close: Vec<f64>,
     pub vol: Vec<f64>,
-    /// `stages` only: first input time to observe.
-    #[serde(default)]
+    /// `stages` only: first input time to observe. When present it must be a
+    /// string; `null` is a wrong type, not an absent field.
+    #[serde(default, deserialize_with = "present_string")]
     pub observe_from: Option<String>,
+}
+
+fn present_string<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<String>, D::Error> {
+    String::deserialize(d).map(Some)
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

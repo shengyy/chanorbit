@@ -231,3 +231,30 @@ fn stages_batch_matches_baselines_in_order() {
         "stages single",
     );
 }
+
+#[test]
+fn observe_from_is_refused_by_geometry_even_as_null() {
+    let request = |observe_from: &str| {
+        format!(
+            r#"{{"id":"g","dt":["2020-01-02T15:00:00"],"high":[1.0],"low":[1.0],"close":[1.0],"vol":[1.0],"observe_from":{observe_from}}}"#
+        )
+    };
+    for value in [r#""2020-01-02T15:00:00""#, "null"] {
+        let out = chanorbit(&["geometry"], &request(value));
+        assert_eq!(out.status.code(), Some(1), "observe_from {value}");
+        let v: Value = serde_json::from_slice(&out.stdout).unwrap();
+        assert_eq!(v["schema"], "chanorbit.geometry/1");
+        assert_eq!(v["id"], "g");
+        assert_eq!(
+            v["error"]["kind"], "invalid_request",
+            "observe_from {value}"
+        );
+    }
+    // stages: a string is the parameter, null is a wrong type.
+    let out = chanorbit(&["stages"], &request(r#""2020-01-02T15:00:00""#));
+    assert_eq!(out.status.code(), Some(0));
+    let out = chanorbit(&["stages"], &request("null"));
+    assert_eq!(out.status.code(), Some(1));
+    let v: Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(v["error"]["kind"], "invalid_request");
+}
