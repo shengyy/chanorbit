@@ -1,10 +1,10 @@
 //! `chanorbit` command line: JSON on stdin, JSON on stdout. See docs/cli-contract.md.
-use chanorbit::contract::{SCHEMA, handle_bytes};
+use chanorbit::contract::{Command, SCHEMA, STAGES_SCHEMA, handle_bytes};
 use std::io::{Read, Write};
 use std::process::ExitCode;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-const USAGE: &str = "usage: chanorbit geometry [--batch [--jobs N]]\n       chanorbit --version\n       chanorbit --help";
+const USAGE: &str = "usage: chanorbit geometry|stages [--batch [--jobs N]]\n       chanorbit --version\n       chanorbit --help";
 
 /// All responses written and successful.
 const EXIT_OK: u8 = 0;
@@ -16,6 +16,7 @@ const EXIT_USAGE: u8 = 2;
 const EXIT_IO: u8 = 3;
 
 struct Args {
+    command: Command,
     batch: bool,
     jobs: Option<usize>,
 }
@@ -23,15 +24,23 @@ struct Args {
 fn parse_args(args: &[String]) -> Result<Option<Args>, String> {
     match args.first().map(String::as_str) {
         Some("--version" | "-V") if args.len() == 1 => {
-            println!("chanorbit {} schema {SCHEMA}", env!("CARGO_PKG_VERSION"));
+            println!(
+                "chanorbit {} schemas {SCHEMA} {STAGES_SCHEMA}",
+                env!("CARGO_PKG_VERSION")
+            );
             Ok(None)
         }
         Some("--help" | "-h") if args.len() == 1 => {
             println!("{USAGE}");
             Ok(None)
         }
-        Some("geometry") => {
+        Some(name @ ("geometry" | "stages")) => {
             let mut parsed = Args {
+                command: if name == "stages" {
+                    Command::Stages
+                } else {
+                    Command::Geometry
+                },
                 batch: false,
                 jobs: None,
             };
@@ -60,7 +69,7 @@ fn parse_args(args: &[String]) -> Result<Option<Args>, String> {
 }
 
 /// Handle lines in parallel; results keep input order.
-fn handle_lines(lines: &[&[u8]], jobs: usize) -> Vec<(String, bool)> {
+fn handle_lines(command: Command, lines: &[&[u8]], jobs: usize) -> Vec<(String, bool)> {
     let next = AtomicUsize::new(0);
     let mut results: Vec<Option<(String, bool)>> = vec![None; lines.len()];
     let workers = jobs.min(lines.len()).max(1);
@@ -72,7 +81,7 @@ fn handle_lines(lines: &[&[u8]], jobs: usize) -> Vec<(String, bool)> {
                     loop {
                         let i = next.fetch_add(1, Ordering::Relaxed);
                         let Some(line) = lines.get(i) else { break };
-                        done.push((i, handle_bytes(line)));
+                        done.push((i, handle_bytes(command, line)));
                     }
                     done
                 })
@@ -108,9 +117,9 @@ fn run(args: Args) -> Result<bool, String> {
         let jobs = args
             .jobs
             .unwrap_or_else(|| std::thread::available_parallelism().map_or(1, |n| n.get()));
-        handle_lines(&lines, jobs)
+        handle_lines(args.command, &lines, jobs)
     } else {
-        vec![handle_bytes(&input)]
+        vec![handle_bytes(args.command, &input)]
     };
     let mut out = std::io::BufWriter::new(std::io::stdout().lock());
     let mut ok = true;

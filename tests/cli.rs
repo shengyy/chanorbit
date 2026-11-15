@@ -191,3 +191,43 @@ fn empty_batch_and_jobs_without_batch() {
     assert_eq!(out.status.code(), Some(0));
     assert!(String::from_utf8(out.stdout).unwrap().starts_with("usage:"));
 }
+
+#[test]
+fn stages_batch_matches_baselines_in_order() {
+    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/golden/stages");
+    let mut files: Vec<_> = std::fs::read_dir(&dir)
+        .unwrap()
+        .map(|e| e.unwrap().path())
+        .collect();
+    files.sort();
+    let cases: Vec<Value> = files
+        .iter()
+        .flat_map(|p| load(p)["cases"].as_array().unwrap().clone())
+        .collect();
+    let mut lines: Vec<String> = cases.iter().map(|c| c["request"].to_string()).collect();
+    lines.insert(1, r#"{"dt":[]}"#.into());
+    let input = lines.join("\n") + "\n";
+    let serial = chanorbit(&["stages", "--batch", "--jobs", "1"], &input);
+    assert_eq!(serial.status.code(), Some(1));
+    let got: Vec<Value> = String::from_utf8(serial.stdout.clone())
+        .unwrap()
+        .lines()
+        .map(|l| serde_json::from_str(l).unwrap())
+        .collect();
+    assert_eq!(got.len(), cases.len() + 1);
+    assert_eq!(got[1]["error"]["kind"], "invalid_request");
+    assert_eq!(got[1]["schema"], "chanorbit.stages/1");
+    let answered = got.iter().take(1).chain(got.iter().skip(2));
+    for (g, c) in answered.zip(&cases) {
+        assert_same(g, &c["response"], "stages");
+    }
+    let threaded = chanorbit(&["stages", "--batch", "--jobs", "8"], &input);
+    assert_eq!(serial.stdout, threaded.stdout);
+    let single = chanorbit(&["stages"], &cases[0]["request"].to_string());
+    assert_eq!(single.status.code(), Some(0));
+    assert_same(
+        &serde_json::from_slice(&single.stdout).unwrap(),
+        &cases[0]["response"],
+        "stages single",
+    );
+}

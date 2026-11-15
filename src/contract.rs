@@ -1,14 +1,32 @@
-//! JSON request/response contract of `chanorbit geometry`. Pure functions:
-//! text in, text out; the binary owns stdin/stdout.
+//! JSON request/response contract of `chanorbit geometry` and `chanorbit
+//! stages`. Pure functions: text in, text out; the binary owns stdin/stdout.
 use crate::analyzer::{Analyzer, Config};
 use crate::bar::RawBar;
 use crate::geometry::{Geometry, geometry};
+use crate::observe::{StageFact, observed_stages};
 use chrono::NaiveDateTime;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-/// Output contract version, carried by every response.
+/// Output contract version of `geometry`, carried by each of its responses.
 pub const SCHEMA: &str = "chanorbit.geometry/1";
+/// Output contract version of `stages`.
+pub const STAGES_SCHEMA: &str = "chanorbit.stages/1";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Command {
+    Geometry,
+    Stages,
+}
+
+impl Command {
+    pub fn schema(self) -> &'static str {
+        match self {
+            Command::Geometry => SCHEMA,
+            Command::Stages => STAGES_SCHEMA,
+        }
+    }
+}
 
 /// Columnar bars: one array per field, equal lengths, in input order.
 #[derive(Debug, Deserialize)]
@@ -21,6 +39,9 @@ pub struct Request {
     pub low: Vec<f64>,
     pub close: Vec<f64>,
     pub vol: Vec<f64>,
+    /// `stages` only: first input time to observe.
+    #[serde(default)]
+    pub observe_from: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -29,6 +50,13 @@ pub struct Response {
     pub id: Value,
     #[serde(flatten)]
     pub geometry: Geometry,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct StagesResponse {
+    pub schema: String,
+    pub id: Value,
+    pub stages: Vec<StageFact>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -44,9 +72,9 @@ pub struct ErrorResponse {
     pub error: ErrorBody,
 }
 
-fn error(id: Value, kind: &str, message: impl Into<String>) -> ErrorResponse {
+fn error(command: Command, id: Value, kind: &str, message: impl Into<String>) -> ErrorResponse {
     ErrorResponse {
-        schema: SCHEMA.into(),
+        schema: command.schema().into(),
         id,
         error: ErrorBody {
             kind: kind.into(),
@@ -164,15 +192,40 @@ pub fn respond(id: Value, c: &Analyzer) -> Response {
     }
 }
 
-/// Run one parsed request with the default stroke parameters.
+/// Run one parsed `geometry` request with the default stroke parameters.
 pub fn run(req: Request) -> Result<Response, ErrorResponse> {
-    let bars = req
-        .bars()
-        .map_err(|(kind, message)| error(req.id.clone(), kind, message))?;
+    let fail = |kind, message| error(Command::Geometry, req.id.clone(), kind, message);
+    if req.observe_from.is_some() {
+        return Err(fail(
+            "invalid_request",
+            "observe_from applies only to stages".into(),
+        ));
+    }
+    let bars = req.bars().map_err(|(kind, message)| fail(kind, message))?;
     Ok(respond(
         req.id,
         &Analyzer::from_bars(bars, Config::default()),
     ))
+}
+
+/// Run one parsed `stages` request with the default stroke parameters.
+pub fn run_stages(req: Request) -> Result<StagesResponse, ErrorResponse> {
+    let fail = |kind, message| error(Command::Stages, req.id.clone(), kind, message);
+    let observe_from = match &req.observe_from {
+        None => None,
+        Some(text) => Some(parse_dt(text).ok_or_else(|| {
+            fail(
+                "invalid_request",
+                format!("observe_from: not YYYY-MM-DDTHH:MM:SS: {text}"),
+            )
+        })?),
+    };
+    let bars = req.bars().map_err(|(kind, message)| fail(kind, message))?;
+    Ok(StagesResponse {
+        schema: STAGES_SCHEMA.into(),
+        id: req.id,
+        stages: observed_stages(&bars, observe_from, Config::default()),
+    })
 }
 
 fn first_byte_is_brace(text: &str) -> bool {
@@ -180,23 +233,39 @@ fn first_byte_is_brace(text: &str) -> bool {
         .starts_with('{')
 }
 
-/// One request text in, one compact JSON line out (no trailing newline).
-/// Returns whether the response is a success.
+fn encode<T: Serialize>(result: Result<T, ErrorResponse>) -> (String, bool) {
+    match result {
+        Ok(r) => (
+            serde_json::to_string(&r).expect("response serializes"),
+            true,
+        ),
+        Err(e) => (serde_json::to_string(&e).expect("error serializes"), false),
+    }
+}
+
+/// One `geometry` request text in, one compact JSON line out (no trailing
+/// newline). Returns whether the response is a success.
 pub fn handle(text: &str) -> (String, bool) {
-    let result = if !first_byte_is_brace(text) {
+    handle_command(Command::Geometry, text)
+}
+
+/// One request text for `command` in, one compact JSON line out.
+pub fn handle_command(command: Command, text: &str) -> (String, bool) {
+    let req = if !first_byte_is_brace(text) {
         let kind = if serde_json::from_str::<Value>(text).is_ok() {
             "invalid_input"
         } else {
             "invalid_json"
         };
         Err(error(
+            command,
             Value::Null,
             kind,
             "a request must be one JSON object",
         ))
     } else {
         match serde_json::from_str::<Request>(text) {
-            Ok(req) => run(req),
+            Ok(req) => Ok(req),
             Err(e) => {
                 // Keep the caller's id when the outer object is readable.
                 let id = serde_json::from_str::<Value>(text)
@@ -208,25 +277,25 @@ pub fn handle(text: &str) -> (String, bool) {
                 } else {
                     "invalid_request"
                 };
-                Err(error(id, kind, e.to_string()))
+                Err(error(command, id, kind, e.to_string()))
             }
         }
     };
-    match result {
-        Ok(r) => (
-            serde_json::to_string(&r).expect("response serializes"),
-            true,
-        ),
-        Err(e) => (serde_json::to_string(&e).expect("error serializes"), false),
+    match (command, req) {
+        (_, Err(e)) => encode::<Response>(Err(e)),
+        (Command::Geometry, Ok(req)) => encode(run(req)),
+        (Command::Stages, Ok(req)) => encode(run_stages(req)),
     }
 }
 
-/// [`handle`] for raw bytes; text that is not UTF-8 is an `invalid_json` error.
-pub fn handle_bytes(bytes: &[u8]) -> (String, bool) {
+/// [`handle_command`] for raw bytes; text that is not UTF-8 is an
+/// `invalid_json` error.
+pub fn handle_bytes(command: Command, bytes: &[u8]) -> (String, bool) {
     match std::str::from_utf8(bytes) {
-        Ok(text) => handle(text),
+        Ok(text) => handle_command(command, text),
         Err(e) => (
             serde_json::to_string(&error(
+                command,
                 Value::Null,
                 "invalid_json",
                 format!("not UTF-8: {e}"),
