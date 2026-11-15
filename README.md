@@ -1,0 +1,37 @@
+# chanOrbit
+
+A small, pure-Rust Chan-theory structure engine: inclusion, fractals, strokes, stroke centres, MACD interval power and a structure geometry snapshot, delivered as one executable that speaks JSON over stdin/stdout.
+
+[简体中文](README.zh-CN.md) · [Product scope](PRODUCT.md) · [Documentation](docs/README.md) · [Test status](docs/status.md)
+
+> **Research & Experimental Use Only — Non-commercial intended use.** No investment advice or trading signals; provided AS IS. See [PRODUCT.md](PRODUCT.md#intended-use-and-disclaimer).
+
+## Build
+
+```sh
+cargo build --release      # target/release/chanorbit
+```
+
+Targets and static Linux builds: [docs/release.md](docs/release.md).
+
+## Use
+
+```sh
+echo '{"id":"demo","dt":["2026-03-02T15:00:00","2026-03-03T15:00:00"],
+  "high":[10.3,10.4],"low":[9.9,10.0],"close":[10.2,10.1],"vol":[1000,1200]}' | target/release/chanorbit geometry
+```
+
+The response holds the geometry snapshot: strokes with interval power, the recent fractals, the canonical centre sequence with the latest two centres, the candidate stroke with its power, and MACD bars and segments. Batch mode takes JSON Lines:
+
+```sh
+target/release/chanorbit geometry --batch < requests.jsonl > responses.jsonl
+```
+
+Requests, responses, errors and exit codes: [docs/cli-contract.md](docs/cli-contract.md). Definitions of every object: [docs/structure-contract.md](docs/structure-contract.md).
+
+## Properties
+
+- Stateless command: each request is recomputed from its full bar sequence.
+- Deterministic: batch output order and bytes do not depend on thread count.
+- Pure engine: no network, files, clock or environment in the library.
+- Dependencies: `serde`, `serde_json`, `chrono`.
