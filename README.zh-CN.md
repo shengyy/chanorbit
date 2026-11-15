@@ -37,3 +37,7 @@ target/release/chanorbit geometry --batch < requests.jsonl > responses.jsonl
 - 输出确定：批量输出顺序与字节不随线程数变化。
 - 纯引擎：库内无网络、文件、时钟或环境变量。
 - 依赖：`serde`、`serde_json`、`chrono`。
+
+## 许可证
+
+使用 [MIT 许可证](LICENSE)。

@@ -31,4 +31,4 @@
 - 中文交流，标识符、命令、路径保持英文；公共文档默认英文，两份 README 同步。
 - 开工确认 cwd、分支与已有 diff，保留无关改动。
 - 门禁命令由 `CONTRIBUTING.md` 持有；行为变化记入 `CHANGELOG.md` 的 `[Unreleased]`。
-- 建远端、推送和许可证由用户决定。
+- 许可证为 MIT（[`LICENSE`](LICENSE)）；建远端与推送由用户决定。

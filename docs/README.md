@@ -9,6 +9,7 @@
 | [AGENTS.md](../AGENTS.md) | Agent boundaries and routing; [CLAUDE.md](../CLAUDE.md) imports it |
 | [CONTRIBUTING.md](../CONTRIBUTING.md) | Toolchain, local gates, baselines and change rules |
 | [SECURITY.md](../SECURITY.md) | Trust boundary |
+| [LICENSE](../LICENSE) | MIT license terms |
 | [CHANGELOG.md](../CHANGELOG.md) | Behaviour changes per version |
 | [architecture.md](architecture.md) | Module map and data flow |
 | [structure-contract.md](structure-contract.md) | Objects, definitions and output fields |

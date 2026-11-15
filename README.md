@@ -37,3 +37,7 @@ Requests, responses, errors and exit codes: [docs/cli-contract.md](docs/cli-cont
 - Deterministic: batch output order and bytes do not depend on thread count.
 - Pure engine: no network, files, clock or environment in the library.
 - Dependencies: `serde`, `serde_json`, `chrono`.
+
+## License
+
+Licensed under [MIT](LICENSE).

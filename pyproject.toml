@@ -7,6 +7,8 @@ name = "chanorbit"
 dynamic = ["version"]
 description = "Lightweight Chan-theory structure engine, shipped as the chanorbit executable"
 requires-python = ">=3.9"
+license = "MIT"
+license-files = ["LICENSE"]
 
 [tool.maturin]
 bindings = "bin"
