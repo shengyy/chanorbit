@@ -609,8 +609,14 @@ impl Level {
                 .copied(),
             _ => None,
         };
-        let retest_extreme =
-            retest.and_then(|r| raw_extreme(raw, r.direction, r.start_at, r.end_at));
+        // Toward the core: the retest's lowest low after an upward exit,
+        // its highest high after a downward one.
+        let toward = if above {
+            Direction::Down
+        } else {
+            Direction::Up
+        };
+        let retest_extreme = retest.and_then(|r| raw_extreme(raw, toward, r.start_at, r.end_at));
         let versus_edge = retest_extreme.map(|e| {
             let (edge, beyond) = if above {
                 (zg, e.price > zg)

@@ -56,10 +56,29 @@ fn states_agree_with_the_last_close_and_zones_partition() {
             for (k, z) in centres.iter().enumerate() {
                 let kind = z["state"]["kind"].as_str().unwrap();
                 let latest = k + 1 == centres.len();
-                kinds.insert(format!(
-                    "{}/{kind}",
-                    if latest { "latest" } else { "ended" }
-                ));
+                let role = if latest { "latest" } else { "ended" };
+                kinds.insert(format!("{role}/{kind}"));
+                let st = &z["state"];
+                if kind == "departed" {
+                    if let Some(d) = st["departure"].as_str() {
+                        kinds.insert(format!("{role}/departure/{d}"));
+                    }
+                    kinds.insert(format!("{role}/versus_edge/{}", st["versus_edge"]));
+                    if let Some(r) = st["retest_role"]["role"].as_str() {
+                        kinds.insert(format!("retest_role/{r}"));
+                    }
+                    // `edge` is the exit side, whatever the element's direction.
+                    if (st["edge"] == "zg") != (st["direction"] == "向上") {
+                        kinds.insert(format!("{role}/against_exit_side"));
+                    }
+                }
+                if latest && kind == "departed" {
+                    // Every bar after the exit is strictly beyond the edge.
+                    assert!(st["versus_edge"].is_null() || st["versus_edge"] == "beyond");
+                }
+                if let Some(v) = z["versus_next"].as_object() {
+                    assert!(v["core"] == "above" || v["core"] == "below", "{v:?}");
+                }
                 if latest {
                     assert_eq!(kind == "inside", z["price_versus_core"] == "inside");
                     assert!(z["state"]["retest_role"].is_null());
@@ -70,6 +89,9 @@ fn states_agree_with_the_last_close_and_zones_partition() {
                 if kind == "formed_out" {
                     assert_eq!(z["member_count"], 3);
                 }
+            }
+            if let Some(reason) = level["child"]["zones_reason"].as_str() {
+                kinds.insert(format!("zones_reason/{reason}"));
             }
             let Some(zones) = level["child"]["zones"].as_object() else {
                 continue;
@@ -88,6 +110,18 @@ fn states_agree_with_the_last_close_and_zones_partition() {
         "latest/formed_out",
         "ended/departed",
         "ended/formed_out",
+        "latest/departure/unfinished",
+        "latest/departure/extension",
+        "latest/departure/after_extreme",
+        "latest/against_exit_side",
+        "ended/against_exit_side",
+        "ended/versus_edge/\"inside\"",
+        "retest_role/entry",
+        "retest_role/member",
+        "zones_reason/no_parent_stroke",
+        "zones_reason/last_start_no_child_bar",
+        "zones_reason/last_end_no_child_bar",
+        "zones_reason/unfinished_extreme_no_child_bar",
     ] {
         assert!(kinds.contains(want), "no baseline covers {want}");
     }
