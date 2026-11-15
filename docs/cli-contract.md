@@ -1,6 +1,6 @@
 # Command-line contract
 
-The only owner of the `chanorbit` command, its JSON request/response shapes, errors and exit codes. Object definitions are in [structure-contract.md](structure-contract.md). Implementation: `src/main.rs` (process I/O) and `src/contract.rs` (request → response).
+The only owner of the `chanorbit` commands, their JSON request/response shapes, errors and exit codes. Object definitions are in [structure-contract.md](structure-contract.md). Implementation: `src/main.rs` (process I/O) and `src/contract.rs` (request → response).
 
 The command is stateless: every request is recomputed from its complete bar sequence. There is no daemon, cache or state between calls.
 
@@ -10,9 +10,12 @@ The command is stateless: every request is recomputed from its complete bar sequ
 chanorbit geometry                   # stdin: one JSON request object (any formatting); stdout: one response line
 chanorbit geometry --batch           # stdin: JSON Lines, one request per line; stdout: one response line per request
 chanorbit geometry --batch --jobs N  # N ≥ 1 worker threads (default: available CPUs)
-chanorbit --version | -V             # "chanorbit <version> schema <schema>"
+chanorbit stages [--batch [--jobs N]]  # the same, answering with the buy-side stages
+chanorbit --version | -V             # "chanorbit <version> schemas <geometry schema> <stages schema>"
 chanorbit --help | -h
 ```
+
+`geometry` answers with the structure snapshot of the last input; `stages` replays the inputs and answers with the confirmed buy-side stages and their observation. Both take the same request and follow the same batch, error and exit-code rules.
 
 `--jobs` is accepted only together with `--batch`; alone, or with a value that is not a positive integer, it is a command-line error (exit 2).
 
@@ -31,7 +34,8 @@ Exactly one JSON object; any other JSON value (for example a positional array) i
 | `id` | any JSON, default `null` | Echoed in the response |
 | `dt` | string array | Exactly `YYYY-MM-DDTHH:MM:SS`: exchange-local wall clock, zero-padded, no fraction, no zone, no surrounding spaces, a real calendar time (no `:60`) |
 | `high`, `low`, `close` | number arrays | Finite prices in `(0, 1e9]`, in the caller's units |
-| `vol` | number array | Finite volume in `[0, 1e15]`, in the caller's units |
+| `vol` | number array | Finite volume in `[0, 1e15]`, in the caller's units; checked by `stages` too, though no stage fact uses it |
+| `observe_from` | string, `stages` only, optional | `YYYY-MM-DDTHH:MM:SS`; observation starts at the first input at or after it ([structure contract](structure-contract.md#observation)). Malformed: `invalid_request`; present in a `geometry` request: `invalid_request` |
 
 - Length: 1 to 200,000 bars per request; more is an `invalid_input` error.
 - Unknown fields are rejected; a repeated key is an `invalid_request` error.
@@ -43,9 +47,13 @@ Columns rather than per-bar objects: the caller already holds its series as colu
 
 ## Response
 
-One object: `schema` (`chanorbit.geometry/1`), `id` (echo), then the [geometry snapshot](structure-contract.md#geometry-snapshot) fields at the top level. Every time is written as `YYYY-MM-DDTHH:MM:SS`, the same format as the input.
+`geometry`: one object with `schema` (`chanorbit.geometry/1`), `id` (echo), then the [geometry snapshot](structure-contract.md#geometry-snapshot) fields at the top level.
 
-Error response, one line:
+`stages`: one object with `schema` (`chanorbit.stages/1`), `id` (echo) and `stages` ([stages output](structure-contract.md#stages-output)).
+
+Every time is written as `YYYY-MM-DDTHH:MM:SS`, the same format as the input.
+
+Error response, one line, carrying the command's schema:
 
 ```json
 {"schema":"chanorbit.geometry/1","id":"…","error":{"kind":"invalid_request","message":"…"}}
@@ -55,7 +63,7 @@ Error response, one line:
 |---|---|
 | `invalid_json` | Not UTF-8, or not parseable JSON |
 | `invalid_input` | Valid JSON that is not an object; more than 200,000 bars |
-| `invalid_request` | Object shape: missing or unknown field, repeated key, wrong type, empty `dt`, column lengths differ |
+| `invalid_request` | Object shape: missing or unknown field, repeated key, wrong type, empty `dt`, column lengths differ, `observe_from` malformed or sent to `geometry` |
 | `invalid_bar` | One bar: `dt` not in the format or earlier than the previous one, a price or volume out of range |
 
 `id` is echoed when the outer object was readable, otherwise `null`. `message` is for humans and not a contract.
@@ -73,4 +81,4 @@ stdout carries only contract JSON, one object per line. stderr carries human-rea
 
 ## Versioning
 
-The schema string changes when a field is removed, renamed or changes meaning. Adding fields keeps it. `--version` and every response carry it; the package version is in `Cargo.toml`.
+Each command has its own schema string; it changes when one of that command's fields is removed, renamed or changes meaning. Adding fields keeps it. `--version` and every response carry them; the package version is in `Cargo.toml`.

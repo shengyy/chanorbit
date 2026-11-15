@@ -23,6 +23,7 @@
 | `src/` | Engine library modules, the JSON contract and the binary entry |
 | `tests/` | Regression, end-to-end and unit tests; `tests/common/` shared helpers |
 | `tests/golden/` | Regression baselines (gzip JSON, synthetic series) |
+| `tests/golden/stages/` | `stages` regression baselines (gzip JSON request/response cases, synthetic series) |
 | `examples/` | In-process timing tool |
 | `docs/` | Current architecture, contracts, status and release facts |
 | `target/`, `.runtime/` | Ignored build output and local scratch |

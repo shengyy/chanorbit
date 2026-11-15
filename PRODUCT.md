@@ -13,14 +13,15 @@ chanOrbit computes Chan-theory stroke structure from a bar sequence and returns 
 | Centres | Canonical stroke-centre partition over the finished strokes |
 | Power | MACD(12, 26, 9) and per-interval histogram areas, end values, sample counts and mean volume |
 | Candidate | Display-only candidate segment after the last stroke, with its power windows |
-| Output | One geometry snapshot per request, carrying only fields a consumer reads, each fact once |
+| Stages | Confirmed buy-side second, third and second-like stages of the last input, with first-known time, age and what followed the retest, from a per-input replay |
+| Output | One geometry snapshot or one stage list per request, carrying only fields a consumer reads, each fact once |
 
 Definitions are in [docs/structure-contract.md](docs/structure-contract.md), the command line in [docs/cli-contract.md](docs/cli-contract.md).
 
 ## Non-goals
 
 - Segments (线段) and recursive trend types (走势类型).
-- Buy/sell point evaluation and trading signals.
+- Trading signals or decisions; sell-side stages, first points as output, and stages whose retest stroke has not formed.
 - Backtesting, positions, order handling or any trader.
 - Data download, storage or price adjustment.
 - A general technical-indicator library.

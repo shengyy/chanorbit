@@ -15,7 +15,9 @@ One crate, `chanorbit`: a library (`src/lib.rs`) holding the engine and the JSON
 | `power` | Interval power, stroke power, MACD bars and segments |
 | `candidate` | Candidate stroke after the last stroke |
 | `geometry` | The geometry snapshot: stroke facts, fractal window, centre sequence and indices, relation, candidate power |
-| `contract` | Columnar request validation, response and error JSON |
+| `stage` | Confirmed buy-side stages of one analyzer state: first-point anchor, second, third, second-like, path guard |
+| `observe` | Per-input replay of the stages: stage identity, first-known time, age, withdrawal record, after-retest state, stage facts |
+| `contract` | Columnar request validation, the two commands' responses and error JSON |
 | `main.rs` | Arguments, stdin/stdout, batch threading, exit codes |
 
 ## Data flow
@@ -27,12 +29,17 @@ columnar request ─► contract::run ─► RawBar ─► Analyzer::update (per
                                                   │  retention pruning
                                                   ▼
                          geometry::geometry: strokes + power, fractals, centres,
-                                             candidate + power, MACD ─► response JSON
+                                             candidate + power, MACD ─► geometry response
+
+columnar request ─► contract::run_stages ─► observe::observed_stages
+                       per input: Analyzer::update ─► stage::stages ─► identity → first seen
+                                  last stroke ─► withdrawal record
+                       last input: stage::stages + candidate ─► stage facts ─► stages response
 ```
 
 Strokes, fractals and the unfinished window share NewBars through `Arc`: a merge replaces the last NewBar with a new allocation, so earlier snapshots stay immutable. The undo record for same-dt revision holds only the latest input's prior window, removed stroke and pruned items.
 
-Later layers (buy/sell stages, per-prefix observation) build on the library: `Analyzer::update` for per-bar state, `Analyzer::strokes`/`finished_strokes`/`pending_bars`, `centre::canonical_centres`, `candidate::candidate_stroke`, `macd::retained_macd` and `power::interval_power`. The command line exposes only the snapshot.
+The stages reuse the same objects: `Analyzer` per-input state, `centre::canonical_centres`, `candidate::candidate_stroke`, `macd::retained_macd` (computed lazily, only when a first point's geometry holds) and `power::stroke_power`. `stages` replays the request through one analyzer and evaluates after every observed input; it does not call `geometry`.
 
 Every input clones the pending window and repeats the fractal scan and stroke search over it. While a stroke keeps forming the window stays short; a series that forms no stroke for its whole length makes the work grow quadratically with its length (tens of thousands of bars take seconds). This is the current state and is bounded only by the request length limit.
 

@@ -1,6 +1,6 @@
 # chanOrbit
 
-A small, pure-Rust Chan-theory structure engine: inclusion, fractals, strokes, stroke centres, MACD interval power and a structure geometry snapshot, delivered as one executable that speaks JSON over stdin/stdout.
+A small, pure-Rust Chan-theory structure engine: inclusion, fractals, strokes, stroke centres, MACD interval power, a structure geometry snapshot and the confirmed buy-side stages with their per-bar observation, delivered as one executable that speaks JSON over stdin/stdout.
 
 [简体中文](README.zh-CN.md) · [Product scope](PRODUCT.md) · [Documentation](docs/README.md) · [Test status](docs/status.md)
 
@@ -26,6 +26,8 @@ The response holds the geometry snapshot: strokes with interval power, the recen
 ```sh
 target/release/chanorbit geometry --batch < requests.jsonl > responses.jsonl
 ```
+
+`chanorbit stages` takes the same requests and answers with the confirmed second, third and second-like stages of the last bar, each with its centre, role strokes, first-known time, age and what followed the retest.
 
 Requests, responses, errors and exit codes: [docs/cli-contract.md](docs/cli-contract.md). Definitions of every object: [docs/structure-contract.md](docs/structure-contract.md).
 

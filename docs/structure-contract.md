@@ -110,4 +110,52 @@ Every fact appears once. Field names follow the consumer's vocabulary.
 | `macd.segments` | `sign`, `start_at`, `end_at`, `bars`, `peak`, `peak_at` |
 | power | `sample_count`, `mean_volume`, `macd`: `status` (`ready`/`unavailable`), `reason`, `positive_area`, `negative_area`, `dif_at_end`, `dea_at_end`, `ready_count` |
 
-Indices into `strokes` are positions in the current retained list; they shift when retention drops old strokes and are not stable identifiers. No buy/sell stage is evaluated.
+Indices into `strokes` are positions in the current retained list; they shift when retention drops old strokes and are not stable identifiers. Stages are a separate output, below.
+
+## Stages
+
+Buy-side stages (买点) of the current strokes, each confirmed by a downward **retest** stroke (回试笔) that is the last stroke. They describe completed structure; they are not trading conclusions. Only confirmed stages are produced: no sell side, no stage whose retest stroke has not formed yet, no reasons for absence.
+
+Notation: `S` is the retained stroke list, `n` its length, `F` the finished count. A **qualified centre** has at least three members that touch its core; "the latest qualified centre over a slice" is the last such centre of the canonical sequence built over that slice of strokes. A stroke's `high`/`low` are its endpoint extremes.
+
+**Path guard.** "The path after stroke `X` stays above `p` up to the cutoff" means every retained raw bar with `X.end_at < dt ≤ cutoff` has `low > p` (touching `p` ends the stage). The cutoff is the last input when the stage's retest is the last stroke, otherwise the retest's `end_at`. Both `X.end_at` and the cutoff must be retained raw bars, and every raw bar that the strokes from `X` to the retest or the unfinished NewBars hold in that range must still be retained; otherwise the guard fails.
+
+**First point (一买), used only as an anchor.** For a down stroke `D = S[e-1]`:
+
+1. the latest qualified centre over `S[..e-1]` has `S[e-2]` as its last member, and its entry (the stroke before its first member) `E` is a down stroke;
+2. `E` enters from above and `D` leaves to a new low: `E.high > zg`, `E.low ≤ zg`, `D.high ≥ zd`, `D.low < min(dd, E.low)`;
+3. divergence (背驰): `D` and `E` both have a negative MACD area (interval power of the stroke), `E`'s is not zero, and `D`'s divided by `E`'s is below 1.
+
+`D` is the first-point anchor (一买点所在离开段). No path guard applies to it as an anchor.
+
+**Second (二买).** The last three strokes are the anchor `A = S[n-3]`, the rebound `R = S[n-2]` and the retest `T = S[n-1]`, where `A` is the anchor of a first point with `e = n-2`. `T` is down, `T.low > A.low`, and the path after `A` stays above `A.low`. Roles: `centre` and `entry` from the first point; `departure` = `first_point_anchor` = `A`; `rebound` = `R`; `retest` = `T`.
+
+**Third (三买).** The latest qualified centre over `S[..F]` has at least four members and its last member is `L = S[n-2]`, an up stroke that leaves it upward (`L.low ≤ zg < L.high`). The retest `T = S[n-1]` is down with `T.low > zg`, and the path after `L` stays above `zg`. Roles: `entry` = the stroke before the centre; `departure` = `L`; `retest` = `T`.
+
+**Second-like (类二买).** The latest qualified centre over `S[..F]` has four or five members and starts at `S[n-5]`. A second stage exists whose retest is that first member: anchor `S[n-7]` (a first point with `e = n-6`), rebound `S[n-6]` (also the centre's entry), retest `S[n-5]`, its path guard cut off at the end of `S[n-5]`. The retest `T = S[n-1]` is down with `T.low > zd`; the path after `R = S[n-2]` stays above `zd`, and the path after the parent anchor stays above the anchor's low. Roles: `entry` = `S[n-6]`; `departure` = `rebound` = `R`; `retest` = `T`; `first_point_anchor` = the parent anchor; `parent` = the parent's rebound and retest.
+
+## Observation
+
+A stage's history comes from replaying the request one input at a time with the same analyzer; nothing is inferred backwards.
+
+- **Observed inputs.** Each input time is observed once, after its last version (a revision replaces the earlier version before observation). Observation starts at the first input with `dt ≥ observe_from`, or at the first input when `observe_from` is absent; earlier inputs only build state.
+- **Same stage.** Kind, the centre's `zd`, `zg` and first three members, and every role stroke (entry, departure, rebound, first-point anchor, retest, parent rebound and retest). Strokes compare by direction, `start_at`, `end_at`, start and end price, high and low. A centre taking more members keeps the stage; any role stroke changing — the retest reaching a new low, for example — makes a new stage.
+- **`first_known_at`.** The first observed input at which the same stage stood. A stage already standing at the first observed input has `null`: it began before observation. The time is kept even if the stage disappears and comes back.
+- **`stage_age`.** Observed inputs after `first_known_at` up to the last input (0 when first known at the last input); `null` with `first_known_at`.
+- **Withdrawal.** Between two observed inputs the last stroke goes from an up stroke `U` back to a down stroke `D` that starts earlier, with `U.start_at = D.end_at` and `U.low = D.low`. The first observed input is not compared. A later withdrawal back to the same `D` (same `end_at` and low) replaces the earlier record.
+- **`withdrawn_rebound`.** When the stage's retest has the `end_at` and low of such a `D`: the latest withdrawn `U` (`start_at`, `end_at`, `high`, `low`), `observed_at` — the observed input from which that version of `U` was the last stroke — and `withdrawn_at` — the observed input at which it was withdrawn. Otherwise `null`.
+- **`beyond_start`**, at the last input: the candidate stroke is available, of kind `reverse`, and its `end_price` is above the retest's high — the move after the retest has passed the retest's start. Independent of `withdrawn_rebound`; both can hold.
+
+Per observed input the engine evaluates the three stages once: the centre sequence over at most `max_strokes` strokes up to three times, path guards over the retained raw bars, and MACD over the retained raw bars only when a first point's geometry holds. A request of `m` inputs costs `O(m · (s + r))` for `s` retained strokes and `r` retained raw bars.
+
+## Stages output
+
+| Field | Meaning |
+|---|---|
+| `stages` | Confirmed stages after the last input, in the order second, third, second-like |
+| `kind` | `second`, `third` or `second_like` |
+| `centre` | The stage's centre: `start_at`, `zd`, `zg` |
+| `entry`, `departure`, `retest` | Role strokes: `start_at`, `end_at`, `high`, `low` |
+| `rebound`, `first_point_anchor` | Role strokes of second and second-like, otherwise `null` |
+| `parent` | Second-like only: the parent second's `rebound` and `retest`, otherwise `null` |
+| `first_known_at`, `stage_age`, `withdrawn_rebound`, `beyond_start` | [Observation](#observation) |

@@ -1,6 +1,6 @@
 # chanOrbit
 
-轻量纯 Rust 缠论结构引擎：包含处理、分型、笔、笔中枢、MACD 区间力度与结构几何快照，以单一可执行文件提供，经 stdin/stdout 交换 JSON。
+轻量纯 Rust 缠论结构引擎：包含处理、分型、笔、笔中枢、MACD 区间力度、结构几何快照与已确认买侧阶段的逐 K 观察，以单一可执行文件提供，经 stdin/stdout 交换 JSON。
 
 [English](README.md) · [产品范围](PRODUCT.md) · [文档](docs/README.md) · [测试状态](docs/status.md)
 
@@ -26,6 +26,8 @@ echo '{"id":"demo","dt":["2026-03-02T15:00:00","2026-03-03T15:00:00"],
 ```sh
 target/release/chanorbit geometry --batch < requests.jsonl > responses.jsonl
 ```
+
+`chanorbit stages` 接受同样的请求，返回最后一根 K 线时已确认的二买、三买与类二买，各带中枢、角色笔、首知时刻、阶段年龄与回试之后的状态。
 
 请求、响应、错误与退出码见 [docs/cli-contract.md](docs/cli-contract.md)；各对象定义见 [docs/structure-contract.md](docs/structure-contract.md)。
 
