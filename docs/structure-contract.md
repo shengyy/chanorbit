@@ -173,15 +173,14 @@ A **point** of a level is one of its raw bars together with a side, high or low 
 
 ### Segments and ranges
 
-A **segment** of a level is one of its window strokes or its unfinished reverse segment (below). Its interval is `(start_at, end_at]`: the start bar belongs to the segment before.
+A **segment** of a level is one of its window strokes or its unfinished reverse segment (below). Its interval is `(start_at, end_at]`: the start bar belongs to the segment before. The level's **sequence** is, in time order, its window strokes, the unfinished segment (either kind), the path after the extreme, and the **tail** (`"tail"`: the raw bars after all of these when no available candidate covers them, read opposite to the last stroke); every raw bar after the first window stroke's start lies in exactly one element.
 
 - **Raw extreme** of a segment: over the retained raw bars with `start_at < dt ≤ end_at`, the highest high for an up segment or the lowest low for a down segment, with `at` the first bar holding it. It can differ from the segment's `end_price`.
-- **Raw range** `[lo, hi]`: the lowest low and highest high over those bars, widened to include `start_price` and `end_price`. Every judgement of exceeding, touching or returning to a core uses the raw range or raw extreme, never stroke endpoints alone.
 - **DIF extreme**: over the same bars, the largest DIF for an up segment or the smallest for a down segment, with its first bar; `null` when some bar in the interval has no DIF.
 
-**Unfinished segment** (`unfinished`): the [candidate stroke](#candidate-stroke) when it is `available`, interval `(anchor_at, end_price_at]`, `start_price = anchor_price`. Only `kind = reverse` is a segment; `kind = extension` (the last stroke is being extended) is reported but takes part in no centre state or zone as a segment.
+**Unfinished segment** (`unfinished`): the [candidate stroke](#candidate-stroke) when it is `available`, interval `(anchor_at, end_price_at]`, `start_price = anchor_price`. Only `kind = reverse` is a segment; `kind = extension` (the last stroke is being extended) is reported and is an element of the sequence (so a latest centre's exit can lie in it), but is never a retest, a zone object or a `passed_by` segment.
 
-**Path after the extreme** (`after_extreme`): when the candidate is available, the raw bars with `end_price_at < dt ≤` the last input, read in the direction opposite to the candidate: its raw extreme (the farthest opposite price, `at`), `bar_count`, and its DIF extreme. It is a path, not a stroke and not a segment; `null` when no bar follows `end_price_at`.
+**Path after the extreme** (`after_extreme`): when the candidate is available, the raw bars with `end_price_at < dt ≤` the last input, read in the direction opposite to the candidate. Every figure covers exactly those bars: the raw extreme (the farthest opposite price, `at`), `bar_count`, the DIF extreme and `power`; only its `price` comparison stops at the raw extreme (start price to extreme). It is a path, not a stroke and not a segment; `null` when no bar follows `end_price_at`.
 
 ### Stroke window
 
@@ -197,24 +196,21 @@ A **segment** of a level is one of its window strokes or its unfinished reverse 
 
 ### Centre state
 
-For a centre with members `M1…Mk`, its **segments** are, for the latest listed centre, `M1`, every later window stroke, and the unfinished segment when it is of kind `reverse`; for an earlier (ended) centre, `M1…Mk` and the stroke that closed it in the canonical sequence, nothing later. Position 0 is `M1`, so position 2 is the third member. An ended centre's state is the fixed record of how it was left and never changes once the centre has ended; the latest centre's state follows price to now. For each segment:
+A centre's state is read from its **path**: the third member's end price, then every retained raw bar after the third member's `end_at` — for the latest listed centre up to the last input, for an earlier (ended) centre up to the `end_at` of the stroke that closed it in the canonical sequence. A raw bar is `above` the core when its low is above `zg`, `below` when its high is below `zd`, otherwise in the core (touching an edge counts as in the core); the start price is placed the same way, edges inside. The path's **end side** is, for the latest centre, the [last close position](#centre-list) `price_versus_core`; for an ended centre, the closing stroke's end price against the core, which is always outside it.
 
-- **overlaps the core**: for a member, and for the first segment after the last member when it starts inside `[zd, zg]` (edges included), `hi ≥ zd` and `lo ≤ zg`; for every other later segment strictly, `hi > zd` and `lo < zg`. Touching an edge from outside is not overlapping.
-- **exceeds** the core: an up segment whose raw extreme is above `zg`, or a down segment whose raw extreme is below `zd`. Equal to the edge does not exceed.
+Exactly one state holds:
 
-Let `j` be the last position whose segment overlaps the core. Exactly one state holds; the engine checks this for every centre and a violation is an `internal_error`:
+- `inside` — latest centre only: the last close is in the core (`price_versus_core = inside`). A last bar that pierces an edge but closes inside is `inside`; one that touches the core but closes outside is `departed`, leaving in that bar.
+- `departed` — the end side is outside and some point of the path is not on it. The **exit** is the bar after the last such point (that point itself when it is the last bar); the departure is the element of the sequence holding the exit — a window stroke, or for the latest centre possibly `unfinished`, `extension`, `after_extreme` or `tail`. It is never the third member or earlier.
+- `formed_out` — the end side is outside and the whole path is on it: formed and never returned. Only a centre with exactly three members can be `formed_out`.
 
-- `departed` — `j ≥ 3` and segment `j` exceeds the core. Segment `j` is the **departure**: the last segment that crossed out of the core, every later segment staying outside. A departure is never the third member: the third member ending outside the core is part of forming the centre.
-- `inside` — the latest segment overlaps the core and does not exceed it: price is back inside the core now.
-- `formed_out` — the centre has exactly three members, the third exceeds the core, and no later segment overlaps it: formed and never returned.
-
-The same rule applies to every listed centre over its own segments. An ended centre is only ever `departed` or `formed_out` — `inside` cannot apply to it — and the engine checks this too. An earlier centre also names `ended_by`, the next listed centre.
+So `inside` holds exactly when the last close is in the core, and `departed` or `formed_out` exactly when it is outside. An ended centre's state is the fixed record of how it was left and never changes once the centre has ended; it is never `inside`. The engine checks these implications and the three-member rule for every centre; a violation is an `internal_error`. An earlier centre also names `ended_by`, the next listed centre. Positions below are window positions (`strokes[i]`) or the sequence names.
 
 Facts by state:
 
-- `departed`: `departure` (segment position), `direction`, `edge` (`zg` for up, `zd` for down), the departure's raw extreme, `member` (whether the departure is a member stroke), `first_beyond_at` (the first raw bar of the departure beyond the edge: high above `zg` / low below `zd`), `returned_inside_at` (the first later raw bar of the departure back inside the core — low below `zg` / high above `zd` — or `null`), `retest` (position `j + 1`, or `null` when the departure is the latest segment), the retest's raw extreme in its own direction with `versus_edge` = `beyond` (strictly beyond the edge it left through) or `at` (equal: holding), and, for the latest centre, `after_retest` (positions `j + 2…`). For an ended centre the retest is its closing stroke, kept even when that stroke is the next listed centre's entry or one of its members; `retest_role` names that role by reference, {`centre` (position in `centres`), `role`: `entry` or `member`}, or `null`; `after_retest` is `null`.
-- `inside`: `segment`, the latest segment's position.
-- `formed_out`: `third` (position 2) and `after` (positions 3…; for an ended centre, the closing stroke).
+- `departed`: `departure`, its `direction` and raw extreme, `edge` (`zg` when the end side is above, `zd` when below), `member` (whether the departure is a member stroke), `first_beyond_at` (the exit bar), `retest` — the element right after a stroke departure when it is a window stroke or the unfinished reverse segment, otherwise `null` (no retest yet) — with its raw extreme in its own direction (`retest_extreme`) and `versus_edge`: `beyond` (strictly beyond the edge it left through), `at` (equal) or `inside` (back in the core). The latest centre carries `after_retest` (the positions after the retest; empty without a retest) and `retest_role: null`. An ended centre's record stops at the retest, kept even when it is the next listed centre's entry or one of its members: `retest_role` names that role by reference, {`centre` (position in `centres`), `role`: `entry` or `member`}, or `null`; `after_retest` is `null`.
+- `inside`: `segment`, the element holding the last bar (the third member when no bar follows it).
+- `formed_out`: `third` and `after` (the positions after it: to the latest element for the latest centre, to the closing stroke for an ended one).
 
 ### Comparisons
 
@@ -236,11 +232,11 @@ Only segments of the same direction are compared, numerator against denominator:
 
 Every level but the finest has `child`, describing the next finer level inside it.
 
-**Points.** For the parent's last stroke, unfinished segment and path after the extreme: the parent raw extreme (`at`, `price`), its child time and price, and `passed_by`: the first child segment that starts at or after that child time, has the same direction, and whose raw extreme goes strictly beyond the child price — its position, `end_at` and extreme — or `null`.
+**Points.** For the parent's last stroke, unfinished segment and path after the extreme: the parent raw extreme (`at`, `price`), its child time and price, and `passed_by`: the first child segment (window stroke or unfinished reverse segment) of the same direction that ends after the child time and whose raw bars after the child time go strictly beyond the child price, whatever its start — its position, `end_at` and that extreme — or `null`. The comparison stays inside the child level's own prices.
 
 **Forces.** For the parent's last stroke and its unfinished segment: the child strokes lying inside the parent segment's child span (zone rules below) that share its direction; comparison rows `last_vs_first` (at least two such strokes) and `last_vs_previous` (at least three) among them, same fields as above.
 
-**Zones.** The boundaries are the child times of the parent's last-stroke start, last-stroke end and unfinished-segment extreme (`b1 < b2 < b3`; no `b3` without an unfinished reverse segment). A child object spans `[a, b]` in child time — a stroke or segment from `start_at` to `end_at` (raw extreme time for the path after the extreme), a centre from `start_at` to `end_at`. It **crosses** boundary `x` when `a < x < b`. Objects with `b ≤ b1` lie before the parent's last stroke and are not placed. Every other object is placed in exactly one zone, the first that applies, and lists every boundary it crosses:
+**Zones.** The boundaries are the child times of the parent's last-stroke start, last-stroke end and unfinished-segment extreme (`b1 < b2 < b3`; no `b3` without an unfinished reverse segment). A child object spans `[a, b]` in child time — a stroke, segment or the path after the extreme from `start_at` to `end_at`, a centre from `start_at` to `end_at`. It **crosses** boundary `x` when `a < x < b`. Objects with `b ≤ b1` lie before the parent's last stroke and are not placed. Every other object is placed in exactly one zone, the first that applies, and lists every boundary it crosses:
 
 1. `crosses_last_start` — crosses `b1`;
 2. `inside_last` — `b1 ≤ a` and `b ≤ b2`;
@@ -261,12 +257,12 @@ The engine checks that each placed object lands in exactly one zone. When a boun
 | `last_input_at` | The level's last `dt` |
 | `strokes` | [Window](#stroke-window) strokes: `direction`, `start_at`, `end_at`, `start_price`, `end_price`, `high`, `low`, `newbar_count`, `finished`, `raw_extreme` {`price`, `at`}, `dif_extreme` {`value`, `at`} or `null`, `power` (as in the geometry snapshot; `sample_count` is the bar count) |
 | `unfinished` | Available candidate: `kind`, `direction`, `anchor_at`, `anchor_price`, `end_price`, `end_price_at`, `bars_after_extreme` (raw bars after `end_price_at`), `raw_extreme`, `dif_extreme`, `power` over `(anchor_at, end_price_at]`; otherwise `null` |
-| `after_extreme` | [Path after the extreme](#segments-and-ranges): `direction`, `start_at` (`end_price_at`), `start_price` (`end_price`), `end_at` (last input), `raw_extreme`, `bar_count`, `dif_extreme`, `power` over `(start_at, raw_extreme.at]`; or `null` |
+| `after_extreme` | [Path after the extreme](#segments-and-ranges): `direction`, `start_at` (`end_price_at`), `start_price` (`end_price`), `end_at` (last input), `raw_extreme`, `bar_count`, `dif_extreme`, `power`, all over `(start_at, end_at]`; or `null` |
 | `fractals` | `dt`, `mark`, `price`, `confirmed_at` over the window |
 | `last_stroke_member` | `member`, `reason` |
 | `centres` | Oldest first: `first_member`, `last_member` (window positions), `member_count`, `entry`, `start_at`, `end_at`, `zd`, `zg`, `dd`, `gg`, `versus_next` {`core`, `outer`} or `null` for the last, `ended_by` (position in `centres` of the next one, `null` for the last), `price_versus_core`, `price_versus_outer`, `state` |
-| `state` | `kind` = `departed`, `inside` or `formed_out` and that state's facts ([centre state](#centre-state)); a segment position is an index into `strokes`, or `"unfinished"`; `departed` carries `after_retest` (latest) or `retest_role` (ended), the other `null` |
+| `state` | `kind` = `departed`, `inside` or `formed_out` and that state's facts ([centre state](#centre-state)); positions are indices into `strokes` or the sequence names; `departed` carries `after_retest` (latest) or `retest_role` (ended), the other `null` |
 | `comparisons` | `completed` and `in_progress`: rows `pair`, `numerator`, `denominator` (positions as above, `"after_extreme"`, `"extension"`), `area`, `price`, `mean_volume`, `bar_count`, `between` {`min_abs_dif`, `dif_crossed_zero`, `dea_crossed_zero`} |
 | `child` | Every level but the finest: `name` of the child level, `points` {`last_stroke`, `unfinished`, `after_extreme`}: each `at`, `price`, `child_at`, `child_price`, `passed_by` {`segment`, `end_at`, `price`} or `null` (the point is `null` when the parent object is absent), `forces` {`last_stroke`, `unfinished`}: comparison rows, `zones`: {`boundaries` {`last_start`, `last_end`, `unfinished_extreme`}, `objects`: `kind` (`stroke`, `unfinished`, `after_extreme`, `centre`), `index` (child window position; for a centre its position in the child's `centres`), `start_at`, `end_at`, `zone`, `crosses` (boundary names)} or `null` with `zones_reason` |
 
-Segment positions use one vocabulary: an integer is `strokes[i]` of that level; `"unfinished"`, `"after_extreme"` and `"extension"` name that level's objects.
+Segment positions use one vocabulary: an integer is `strokes[i]` of that level; `"unfinished"`, `"extension"`, `"after_extreme"` and `"tail"` name that level's objects.

@@ -111,6 +111,12 @@ fn version_usage_and_exit_codes() {
     assert_eq!(out.status.code(), Some(0));
     let text = String::from_utf8(out.stdout).unwrap();
     assert!(text.starts_with("chanorbit ") && text.contains(chanorbit::contract::SCHEMA));
+    assert!(text.trim_end().ends_with(&format!(
+        "schemas {} {} {}",
+        chanorbit::contract::SCHEMA,
+        chanorbit::contract::STAGES_SCHEMA,
+        chanorbit::contract::LEVELS_SCHEMA
+    )));
     let out = chanorbit(&["geometry", "--bogus"], "");
     assert_eq!(out.status.code(), Some(2));
     assert!(out.stdout.is_empty() && !out.stderr.is_empty());
@@ -301,4 +307,38 @@ fn a_closed_stdout_exits_with_the_io_code() {
             }
         }
     }
+}
+
+#[test]
+fn levels_batch_matches_baselines_in_order() {
+    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/golden/levels");
+    let mut files: Vec<_> = std::fs::read_dir(&dir)
+        .unwrap()
+        .map(|e| e.unwrap().path())
+        .collect();
+    files.sort();
+    let cases: Vec<Value> = files
+        .iter()
+        .flat_map(|p| load(p)["cases"].as_array().unwrap().clone())
+        .collect();
+    let mut lines: Vec<String> = cases.iter().map(|c| c["request"].to_string()).collect();
+    lines.insert(1, r#"{"id":"bad","levels":[]}"#.into());
+    let input = lines.join("\n") + "\n";
+    let serial = chanorbit(&["levels", "--batch", "--jobs", "1"], &input);
+    assert_eq!(serial.status.code(), Some(1));
+    let got: Vec<Value> = String::from_utf8(serial.stdout.clone())
+        .unwrap()
+        .lines()
+        .map(|l| serde_json::from_str(l).unwrap())
+        .collect();
+    assert_eq!(got.len(), cases.len() + 1);
+    assert_eq!(got[1]["error"]["kind"], "invalid_request");
+    assert_eq!(got[1]["schema"], "chanorbit.levels/1");
+    assert_eq!(got[1]["id"], "bad");
+    let answered = got.iter().take(1).chain(got.iter().skip(2));
+    for (g, c) in answered.zip(&cases) {
+        assert_same(g, &c["response"], "levels");
+    }
+    let threaded = chanorbit(&["levels", "--batch", "--jobs", "8"], &input);
+    assert_eq!(serial.stdout, threaded.stdout);
 }

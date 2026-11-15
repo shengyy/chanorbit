@@ -24,6 +24,7 @@ pub enum Pos {
     Unfinished,
     AfterExtreme,
     Extension,
+    Tail,
 }
 
 impl Serialize for Pos {
@@ -33,6 +34,7 @@ impl Serialize for Pos {
             Pos::Unfinished => s.serialize_str("unfinished"),
             Pos::AfterExtreme => s.serialize_str("after_extreme"),
             Pos::Extension => s.serialize_str("extension"),
+            Pos::Tail => s.serialize_str("tail"),
         }
     }
 }
@@ -120,8 +122,7 @@ pub enum State {
         edge: &'static str,
         raw_extreme: Option<Extreme>,
         member: bool,
-        first_beyond_at: Option<NaiveDateTime>,
-        returned_inside_at: Option<NaiveDateTime>,
+        first_beyond_at: NaiveDateTime,
         retest: Option<Pos>,
         retest_extreme: Option<Extreme>,
         versus_edge: Option<&'static str>,
@@ -256,18 +257,6 @@ fn dif_extreme(
     })
 }
 
-/// Raw range `[lo, hi]` of a segment, widened to its endpoint prices.
-pub fn raw_range(raw: &[RawBar], seg: &Seg) -> (f64, f64) {
-    let r = rows(raw, seg.start_at, seg.end_at);
-    raw[r].iter().fold(
-        (
-            seg.start_price.min(seg.end_price),
-            seg.start_price.max(seg.end_price),
-        ),
-        |(lo, hi), b| (lo.min(b.low), hi.max(b.high)),
-    )
-}
-
 /// This centre (`a`) versus the next (`b`): `above` when `a` lies above `b`.
 fn versus(a: &Centre, b: &Centre) -> Versus {
     Versus {
@@ -286,72 +275,16 @@ fn position(price: f64, low: f64, high: f64) -> &'static str {
     }
 }
 
-/// Positions `j` that overlap the core and the state, per the centre-state rule.
-fn classify(
-    raw: &[RawBar],
-    segs: &[Seg],
-    members: usize,
-    zd: f64,
-    zg: f64,
-) -> (Option<usize>, Vec<&'static str>) {
-    let ranges: Vec<(f64, f64)> = segs.iter().map(|s| raw_range(raw, s)).collect();
-    let overlaps = |k: usize| {
-        let (lo, hi) = ranges[k];
-        let s = &segs[k];
-        if k < members || (k == members && (zd..=zg).contains(&s.start_price)) {
-            hi >= zd && lo <= zg
-        } else {
-            hi > zd && lo < zg
-        }
-    };
-    let exceeds = |k: usize| {
-        let s = &segs[k];
-        match raw_extreme(raw, s.direction, s.start_at, s.end_at) {
-            Some(x) if up(s.direction) => x.price.max(s.end_price) > zg,
-            Some(x) => x.price.min(s.end_price) < zd,
-            None => {
-                if up(s.direction) {
-                    s.end_price > zg
-                } else {
-                    s.end_price < zd
-                }
-            }
-        }
-    };
-    let j = (0..segs.len()).rev().find(|&k| overlaps(k));
-    let last = segs.len() - 1;
-    let mut states = Vec::new();
-    if j.is_some_and(|j| j >= 3 && exceeds(j)) {
-        states.push("departed");
+/// Side of a raw bar against the core: `above` (low over `zg`), `below`
+/// (high under `zd`), otherwise `inside`.
+fn side(b: &RawBar, zd: f64, zg: f64) -> &'static str {
+    if b.low > zg {
+        "above"
+    } else if b.high < zd {
+        "below"
+    } else {
+        "inside"
     }
-    if overlaps(last) && !exceeds(last) {
-        states.push("inside");
-    }
-    if members == 3 && segs.len() >= 3 && exceeds(2) && !(3..segs.len()).any(overlaps) {
-        states.push("formed_out");
-    }
-    (j, states)
-}
-
-fn first_beyond_and_return(
-    raw: &[RawBar],
-    seg: &Seg,
-    zd: f64,
-    zg: f64,
-) -> (Option<NaiveDateTime>, Option<NaiveDateTime>) {
-    let bars = &raw[rows(raw, seg.start_at, seg.end_at)];
-    let u = up(seg.direction);
-    let Some(k) = bars
-        .iter()
-        .position(|b| if u { b.high > zg } else { b.low < zd })
-    else {
-        return (None, None);
-    };
-    let back = bars[k + 1..]
-        .iter()
-        .find(|b| if u { b.low < zg } else { b.high > zd })
-        .map(|b| b.dt);
-    (Some(bars[k].dt), back)
 }
 
 impl Level {
@@ -467,7 +400,7 @@ impl Level {
                     raw_extreme: x,
                     bar_count: rows(raw, et, last).len(),
                     dif_extreme: dif_extreme(raw, macd, pd, et, last),
-                    power: interval_power(c, macd, et, x.at),
+                    power: interval_power(c, macd, et, last),
                 });
             }
         }
@@ -513,6 +446,17 @@ impl Level {
                 state,
             });
         }
+        if let Some(z) = centres.last() {
+            // The latest state never contradicts where the last close stands.
+            assert_eq!(
+                matches!(z.state, State::Inside { .. }),
+                z.price_versus_core == "inside",
+                "latest centre state {:?} against last close {close} in [{}, {}]",
+                z.state,
+                z.zd,
+                z.zg
+            );
+        }
         self.centres = centres;
         self.comparisons = self.comparisons_of();
     }
@@ -554,113 +498,165 @@ impl Level {
             pos: Pos::AfterExtreme,
             direction: p.direction,
             start_at: p.start_at,
-            end_at: p.raw_extreme.at,
+            end_at: p.end_at,
             start_price: p.start_price,
             end_price: p.raw_extreme.price,
         })
     }
 
+    /// Raw bars after everything above, when no candidate covers them.
+    fn tail_seg(&self) -> Option<Seg> {
+        let raw = self.raw();
+        let last = raw.last()?;
+        let stroke = self.strokes.last()?;
+        let covered = [self.unfinished_seg(), self.after_seg()]
+            .into_iter()
+            .flatten()
+            .map(|s| s.end_at)
+            .fold(stroke.end_at, NaiveDateTime::max);
+        let d = stroke.direction.opposite();
+        let x = raw_extreme(raw, d, covered, last.dt)?;
+        Some(Seg {
+            pos: Pos::Tail,
+            direction: d,
+            start_at: covered,
+            end_at: last.dt,
+            start_price: stroke.end_price,
+            end_price: x.price,
+        })
+    }
+
+    /// Every segment and path of the level in time order: window strokes,
+    /// the unfinished segment, the path after its extreme, the tail.
+    pub(crate) fn sequence(&self) -> Vec<Seg> {
+        (0..self.strokes.len())
+            .map(|k| self.seg(k))
+            .chain(self.unfinished_seg())
+            .chain(self.after_seg())
+            .chain(self.tail_seg())
+            .collect()
+    }
+
+    /// The centre's state from its raw path after the third member
+    /// (`docs/structure-contract.md#centre-state`).
     fn state_of(&self, z: &Centre, next: Option<&Centre>, k: usize) -> State {
         let raw = self.raw();
         let w0 = self.window_start;
         let (zd, zg) = (z.core_low, z.core_high);
-        let first = z.start - w0;
-        let segs: Vec<Seg> = match next {
-            // Ended: members and the stroke that closed the centre.
-            Some(_) => (first..=z.end - w0).map(|p| self.seg(p)).collect(),
-            None => (first..self.strokes.len())
-                .map(|p| self.seg(p))
-                .chain(self.reverse_seg())
-                .collect(),
-        };
         let members = z.member_count();
-        let (j, states) = classify(raw, &segs, members, zd, zg);
-        let detail = || {
-            let parts: Vec<String> = segs
-                .iter()
-                .map(|s| {
-                    let (lo, hi) = raw_range(raw, s);
-                    format!(
-                        "{:?} {:?} {}..{} {}->{} raw [{lo}, {hi}]",
-                        s.pos, s.direction, s.start_at, s.end_at, s.start_price, s.end_price
-                    )
-                })
-                .collect();
-            format!(
-                "centre {k}, {members} members, zd {zd}, zg {zg}, j {j:?}: {}",
-                parts.join("; ")
-            )
-        };
-        assert!(
-            states.len() == 1,
-            "centre state not exactly one: {states:?} ({})",
-            detail()
-        );
-        if next.is_some() {
-            assert!(
-                states[0] != "inside",
-                "an ended centre cannot be inside ({})",
-                detail()
-            );
-        }
-        match states[0] {
-            "inside" => State::Inside {
-                segment: segs[segs.len() - 1].pos,
-            },
-            "formed_out" => State::FormedOut {
-                third: segs[2].pos,
-                after: segs[3..].iter().map(|s| s.pos).collect(),
-            },
-            _ => {
-                let j = j.expect("departed has a position");
-                let x = segs[j];
-                let u = up(x.direction);
-                let (first_beyond_at, returned_inside_at) =
-                    first_beyond_and_return(raw, &x, zd, zg);
-                let retest = segs.get(j + 1).copied();
-                let retest_extreme =
-                    retest.and_then(|r| raw_extreme(raw, r.direction, r.start_at, r.end_at));
-                let versus_edge = retest.map(|r| {
-                    let (lo, hi) = raw_range(raw, &r);
-                    let held_at = if u { lo == zg } else { hi == zd };
-                    if held_at { "at" } else { "beyond" }
-                });
-                let retest_role = next.and_then(|n| {
-                    let p = z.end;
-                    if p == n.start - 1 {
-                        Some(RetestRole {
-                            centre: k + 1,
-                            role: "entry",
-                        })
-                    } else if (n.start..n.end).contains(&p) {
-                        Some(RetestRole {
-                            centre: k + 1,
-                            role: "member",
-                        })
-                    } else {
-                        None
-                    }
-                });
-                State::Departed {
-                    departure: x.pos,
-                    direction: x.direction,
-                    edge: if u { "zg" } else { "zd" },
-                    raw_extreme: raw_extreme(raw, x.direction, x.start_at, x.end_at),
-                    member: j < members,
-                    first_beyond_at,
-                    returned_inside_at,
-                    retest: retest.map(|r| r.pos),
-                    retest_extreme,
-                    versus_edge,
-                    after_retest: next.is_none().then(|| {
-                        segs[(j + 2).min(segs.len())..]
-                            .iter()
-                            .map(|s| s.pos)
-                            .collect()
-                    }),
-                    retest_role,
-                }
+        let third = z.start + 2 - w0;
+        let segs = self.sequence();
+        let last = raw.last().expect("a level with strokes has bars");
+        let (until, end_side) = match next {
+            Some(_) => {
+                let closing = &self.strokes[z.end - w0];
+                (closing.end_at, position(closing.end_price, zd, zg))
             }
+            None => (last.dt, position(last.close, zd, zg)),
+        };
+        let containing = |t: NaiveDateTime| {
+            segs.iter()
+                .position(|s| s.start_at < t && t <= s.end_at)
+                .unwrap_or_else(|| panic!("no segment holds {t} (centre {k})"))
+        };
+        if end_side == "inside" {
+            assert!(
+                next.is_none(),
+                "centre {k}: the stroke that closed it ends inside its core [{zd}, {zg}]"
+            );
+            let at = if last.dt > self.strokes[third].end_at {
+                containing(last.dt)
+            } else {
+                third
+            };
+            return State::Inside {
+                segment: segs[at].pos,
+            };
+        }
+        let path = &raw[rows(raw, self.strokes[third].end_at, until)];
+        let after_third = |to: usize| segs[third + 1..to].iter().map(|s| s.pos).collect();
+        // The path starts at the third member's end price, then its raw bars.
+        let start_met = position(self.strokes[third].end_price, zd, zg) != end_side;
+        let star = match path.iter().rposition(|b| side(b, zd, zg) != end_side) {
+            Some(i) => path.get(i + 1).or(path.get(i)),
+            None if start_met => path.first(),
+            None => None,
+        };
+        let Some(exit) = star else {
+            assert!(
+                members == 3,
+                "centre {k}: {members} members but the path never meets the core [{zd}, {zg}] (ended {}, path {} bars after {}, until {until}, side {end_side})",
+                next.is_some(),
+                path.len(),
+                self.strokes[third].end_at
+            );
+            let to = match next {
+                Some(_) => z.end - w0 + 1,
+                None => segs.len(),
+            };
+            return State::FormedOut {
+                third: Pos::Stroke(2 + z.start - w0),
+                after: after_third(to),
+            };
+        };
+        let j = containing(exit.dt);
+        let x = segs[j];
+        let above = end_side == "above";
+        let retest = match x.pos {
+            Pos::Stroke(_) => segs
+                .get(j + 1)
+                .filter(|r| matches!(r.pos, Pos::Stroke(_) | Pos::Unfinished))
+                .copied(),
+            _ => None,
+        };
+        let retest_extreme =
+            retest.and_then(|r| raw_extreme(raw, r.direction, r.start_at, r.end_at));
+        let versus_edge = retest_extreme.map(|e| {
+            let (edge, beyond) = if above {
+                (zg, e.price > zg)
+            } else {
+                (zd, e.price < zd)
+            };
+            if e.price == edge {
+                "at"
+            } else if beyond {
+                "beyond"
+            } else {
+                "inside"
+            }
+        });
+        let retest_role = match (next, retest.map(|r| r.pos)) {
+            (Some(n), Some(Pos::Stroke(p))) => {
+                let p = p + w0;
+                let role = if p + 1 == n.start {
+                    Some("entry")
+                } else if (n.start..n.end).contains(&p) {
+                    Some("member")
+                } else {
+                    None
+                };
+                role.map(|role| RetestRole {
+                    centre: k + 1,
+                    role,
+                })
+            }
+            _ => None,
+        };
+        State::Departed {
+            departure: x.pos,
+            direction: x.direction,
+            edge: if above { "zg" } else { "zd" },
+            raw_extreme: raw_extreme(raw, x.direction, x.start_at, x.end_at),
+            member: matches!(x.pos, Pos::Stroke(p) if p + w0 < z.end),
+            first_beyond_at: exit.dt,
+            retest: retest.map(|r| r.pos),
+            retest_extreme,
+            versus_edge,
+            after_retest: next.is_none().then(|| match retest {
+                Some(_) => segs[j + 2..].iter().map(|s| s.pos).collect(),
+                None => Vec::new(),
+            }),
+            retest_role,
         }
     }
 }

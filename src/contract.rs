@@ -513,6 +513,20 @@ mod tests {
     }
 
     #[test]
+    fn a_panic_in_a_levels_request_is_its_internal_error() {
+        let level = r#"{"name":"d","dt":["2020-01-02T15:00:00"],"high":[2.0],"low":[1.0],"close":[1.5],"vol":[1.0]}"#;
+        let ok = format!(r#"{{"id":"a","levels":[{level}]}}"#);
+        let probe = format!(r#"{{"id":"{PROBE}","levels":[{level}]}}"#);
+        assert!(handle_bytes(Command::Levels, ok.as_bytes()).1);
+        let (text, ok) = handle_bytes(Command::Levels, probe.as_bytes());
+        assert!(!ok);
+        let e: Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(e["schema"], LEVELS_SCHEMA);
+        assert_eq!(e["id"], PROBE);
+        assert_eq!(e["error"]["kind"], "internal_error");
+    }
+
+    #[test]
     fn a_non_text_panic_payload_is_named() {
         let (text, ok) = contained::<Response>(Command::Geometry, Value::Null, || {
             std::panic::panic_any(7_u8)

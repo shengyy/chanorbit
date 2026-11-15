@@ -9,6 +9,8 @@
 - Regression baselines in `tests/golden/` and an end-to-end stdin→stdout test.
 - `pyproject.toml`: the executable as a maturin `bin` wheel, installable with `uv pip install` or as a git dependency.
 - `chanorbit stages` command (schema `chanorbit.stages/1`): replays the request one input at a time and answers with the confirmed buy-side second, third and second-like stages of the last input — centre, role strokes, first-known time, age in observed inputs, whether the move after the retest has passed the retest's start, and the withdrawn rebound stroke from the retest with when it was seen and withdrawn; optional `observe_from` (a string; `null` is refused) starts observation later, and `geometry` refuses the field, `null` included. A time revised within one request is observed once, after its last version. `--version` lists both schemas.
+- `chanorbit levels` command (schema `chanorbit.levels/1`): one instrument, several period series coarsest first, bars labelled by the end of their period. Per level: a stroke window, raw and DIF extremes, the unfinished segment and the path after its extreme, up to five recent centres with last-close position and state (`departed`, `inside`, `formed_out`) read from the raw path after the third member — an ended centre's state is the fixed record of how it was left, with its retest's role in the next centre — and same-direction comparisons. Each finer level is placed in the next coarser one: child times of the parent's points, whether the child has passed them, child forces and zones. `--version` lists the third schema.
+- Levels regression baselines in `tests/golden/levels/`.
 - Stage regression baselines in `tests/golden/stages/`: each kind, after-retest states, no stage, first-known and observation-start boundaries, first time unknown at the observation start for each kind, revisions, more second-like series, retest low exactly at and one tick above the guard.
 
 ### Changed
@@ -18,5 +20,5 @@
 
 ### Fixed
 
-- A panic while computing one request becomes that request's `internal_error` (exit code 1) for `geometry` and `stages`, single and batch; the other lines are answered as before, in order. The release profile states `panic = "unwind"`.
+- A panic while computing one request becomes that request's `internal_error` (exit code 1) for every command, single and batch; the other lines are answered as before, in order. The release profile states `panic = "unwind"`.
 - A stdout that can no longer be written, including a reader that closed the pipe, exits with code 3 without a panic, also for `--version` and `--help`; a closed stderr is ignored.

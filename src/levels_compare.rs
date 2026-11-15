@@ -117,11 +117,8 @@ impl Level {
         else {
             return None;
         };
-        let get = |p: &Pos| match p {
-            Pos::Stroke(k) => Some(self.seg(*k)),
-            Pos::Unfinished => self.reverse_seg(),
-            _ => None,
-        };
+        let sequence = self.sequence();
+        let get = |p: &Pos| sequence.iter().find(|s| s.pos == *p).copied();
         Some((get(departure)?, retest.as_ref().and_then(get)))
     }
 

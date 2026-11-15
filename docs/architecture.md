@@ -17,7 +17,10 @@ One crate, `chanorbit`: a library (`src/lib.rs`) holding the engine and the JSON
 | `geometry` | The geometry snapshot: stroke facts, fractal window, centre sequence and indices, relation, candidate power |
 | `stage` | Confirmed buy-side stages of one analyzer state: first-point anchor, second, third, second-like, path guard |
 | `observe` | Per-input replay of the stages: stage identity, first-known time, age, withdrawal record, after-retest state, stage facts |
-| `contract` | Columnar request validation, the two commands' responses and error JSON |
+| `levels` | One level of a `levels` request: stroke window, raw and DIF extremes, unfinished segment, path after its extreme, tail, centre list, last close position, centre state from the raw path |
+| `levels_compare` | Same-direction comparison rows of a level's segments |
+| `levels_child` | The `levels` output: every level built coarsest first (a child's window covers its parent's last stroke), child times, points with `passed_by`, forces and zones |
+| `contract` | Columnar request validation, the three commands' responses and error JSON |
 | `main.rs` | Arguments, stdin/stdout, batch threading, exit codes |
 
 ## Data flow
@@ -35,6 +38,10 @@ columnar request ─► contract::run_stages ─► observe::observed_stages
                        per input: Analyzer::update ─► stage::stages ─► identity → first seen
                                   last stroke ─► withdrawal record
                        last input: stage::stages + candidate ─► stage facts ─► stages response
+
+levels request ─► contract::run_levels ─► per level, coarsest first: Analyzer::from_bars
+                       ─► levels::Level::build (window covers the parent's last-stroke start)
+                  per parent/child pair: levels_child child times, points, forces, zones ─► levels response
 ```
 
 Strokes, fractals and the unfinished window share NewBars through `Arc`: a merge replaces the last NewBar with a new allocation, so earlier snapshots stay immutable. The undo record for same-dt revision holds only the latest input's prior window, removed stroke and pruned items.

@@ -129,11 +129,13 @@ fn point(
     price: f64,
 ) -> Point {
     let found = child_time(&parent.input, &child.input, at, up(d));
+    // Any same-direction child segment ending after the child time whose
+    // raw price after that time goes strictly beyond the child price.
     let passed_by = found.and_then(|(t, p)| {
         segs.iter()
-            .filter(|s| s.start_at >= t && s.direction == d)
+            .filter(|s| s.end_at > t && s.direction == d)
             .find_map(|s| {
-                let x = raw_extreme(child.raw(), d, s.start_at, s.end_at)?;
+                let x = raw_extreme(child.raw(), d, s.start_at.max(t), s.end_at)?;
                 let beyond = if up(d) { x.price > p } else { x.price < p };
                 beyond.then_some(PassedBy {
                     segment: s.pos,
@@ -254,7 +256,7 @@ fn zones(child: &Level, z: &Boundaries) -> Vec<Placed> {
         spans.push(("unfinished", None, u.start_at, u.end_at));
     }
     if let Some(p) = &child.after_extreme {
-        spans.push(("after_extreme", None, p.start_at, p.raw_extreme.at));
+        spans.push(("after_extreme", None, p.start_at, p.end_at));
     }
     for (k, c) in child.centres.iter().enumerate() {
         spans.push(("centre", Some(k), c.start_at, c.end_at));
@@ -375,4 +377,91 @@ pub fn levels(inputs: &[(String, Vec<RawBar>)]) -> Vec<LevelOut> {
             output(&built[i], &inputs[i].0, child)
         })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn t(s: &str) -> NaiveDateTime {
+        NaiveDateTime::parse_from_str(s, "%Y-%m-%dT%H:%M:%S").unwrap()
+    }
+
+    fn bar(dt: &str, high: f64, low: f64) -> RawBar {
+        RawBar {
+            dt: t(dt),
+            high,
+            low,
+            close: low,
+            vol: 1.0,
+        }
+    }
+
+    #[test]
+    fn child_time_is_the_first_extreme_bar_inside_the_parent_period() {
+        let parent = [
+            bar("2026-01-05T15:00:00", 3.0, 1.0),
+            bar("2026-01-06T15:00:00", 3.0, 1.0),
+        ];
+        let child = [
+            bar("2026-01-05T14:30:00", 9.0, 0.1),
+            bar("2026-01-06T10:00:00", 2.5, 1.2),
+            bar("2026-01-06T11:00:00", 2.9, 1.1),
+            bar("2026-01-06T14:00:00", 2.9, 1.1),
+            bar("2026-01-06T15:00:00", 2.0, 1.5),
+        ];
+        let at = t("2026-01-06T15:00:00");
+        assert_eq!(
+            child_time(&parent, &child, at, true),
+            Some((t("2026-01-06T11:00:00"), 2.9))
+        );
+        assert_eq!(
+            child_time(&parent, &child, at, false),
+            Some((t("2026-01-06T11:00:00"), 1.1))
+        );
+        // The first parent bar covers everything up to its dt.
+        assert_eq!(
+            child_time(&parent, &child, t("2026-01-05T15:00:00"), true),
+            Some((t("2026-01-05T14:30:00"), 9.0))
+        );
+        assert_eq!(
+            child_time(&parent, &child[1..], t("2026-01-05T15:00:00"), true),
+            None
+        );
+    }
+
+    #[test]
+    fn every_span_after_the_last_start_lands_in_exactly_one_zone() {
+        let base = t("2026-01-05T09:00:00");
+        let at = |m: i64| base + chrono::Duration::minutes(m);
+        for b3 in [None, Some(at(30))] {
+            let z = Boundaries {
+                last_start: at(10),
+                last_end: at(20),
+                unfinished_extreme: b3,
+            };
+            for a in 0..45 {
+                for b in a + 1..46 {
+                    if at(b) <= z.last_start {
+                        continue;
+                    }
+                    let zone = zone_of(at(a), at(b), &z);
+                    let crosses = crossed(at(a), at(b), &z);
+                    let expect = match zone {
+                        "crosses_last_start" => crosses.first() == Some(&"last_start"),
+                        "inside_last" => a >= 10 && b <= 20 && crosses.is_empty(),
+                        "crosses_last_end" => a >= 10 && crosses.first() == Some(&"last_end"),
+                        "inside_unfinished" => a >= 20 && b <= 30 && crosses.is_empty(),
+                        "crosses_unfinished_extreme" => {
+                            a >= 20 && crosses == ["unfinished_extreme"]
+                        }
+                        "after_extreme" => b3.is_some() && a >= 30,
+                        "after_last" => b3.is_none() && a >= 20,
+                        _ => false,
+                    };
+                    assert!(expect, "[{a}, {b}] with {b3:?}: {zone} {crosses:?}");
+                }
+            }
+        }
+    }
 }
