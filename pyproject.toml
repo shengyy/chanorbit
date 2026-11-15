@@ -1,0 +1,12 @@
+[build-system]
+requires = ["maturin>=1.7,<2"]
+build-backend = "maturin"
+
+[project]
+name = "chanorbit"
+dynamic = ["version"]
+description = "Lightweight Chan-theory structure engine, shipped as the chanorbit executable"
+requires-python = ">=3.9"
+
+[tool.maturin]
+bindings = "bin"
