@@ -13,16 +13,16 @@ fn iso(dt: chrono::NaiveDateTime) -> Value {
 }
 
 fn trace_row(c: &Analyzer) -> Value {
-    let last = c.bi_list().last();
+    let last = c.strokes().last();
     let cand = chanorbit::candidate::candidate_stroke(c);
     json!([
-        c.bi_list().len(),
-        c.bars_ubi().len(),
-        c.bars_raw().len(),
+        c.strokes().len(),
+        c.pending_bars().len(),
+        c.raw_bars().len(),
         last.map(|b| iso(b.sdt())),
         last.map(|b| iso(b.edt())),
-        c.fx_list().len(),
-        c.finished_len(),
+        c.fractals().len(),
+        c.finished_count(),
         cand.state
     ])
 }
@@ -52,27 +52,27 @@ fn baselines_match_field_by_field() {
             trace.push(trace_row(&c));
             while let Some(p) = prefixes.next_if(|p| p["inputs"] == i + 1) {
                 let got = serde_json::to_value(geometry(&c)).unwrap();
-                diff.compare(&format!("prefix[{}]", i + 1), "", &got, &p["geometry"]);
+                diff.compare(&format!("prefix[{}]", i + 1), &got, &p["geometry"]);
             }
         }
         if prefixes.next().is_some() {
             diff.mismatches.push("prefix beyond input".into());
         }
-        diff.compare("trace", "", &Value::Array(trace), &doc["trace"]);
+        diff.compare("trace", &Value::Array(trace), &doc["trace"]);
 
         // 2. Final response.
         let got = serde_json::to_value(respond(doc["request"]["id"].clone(), &c)).unwrap();
-        diff.compare("response", "", &got, &doc["response"]);
+        diff.compare("response", &got, &doc["response"]);
 
         // 3. Final NewBar detail and retained raw bars.
         let detail = json!({
-            "bars_ubi": c.bars_ubi().iter().map(|b| newbar_full(b)).collect::<Vec<_>>(),
-            "bi_bars": c.bi_list().iter()
-                .map(|bi| bi.bars.iter().map(|b| newbar_full(b)).collect::<Vec<_>>())
+            "pending_newbars": c.pending_bars().iter().map(|b| newbar_full(b)).collect::<Vec<_>>(),
+            "stroke_newbars": c.strokes().iter()
+                .map(|stroke| stroke.newbars.iter().map(|b| newbar_full(b)).collect::<Vec<_>>())
                 .collect::<Vec<_>>(),
-            "bars_raw": c.bars_raw().iter().map(|b| iso(b.dt)).collect::<Vec<_>>(),
+            "raw_bars": c.raw_bars().iter().map(|b| iso(b.dt)).collect::<Vec<_>>(),
         });
-        diff.compare("detail", "", &detail, &doc["detail"]);
+        diff.compare("detail", &detail, &doc["detail"]);
 
         // 4. Batch construction equals the incremental result.
         if geometry(&Analyzer::from_bars(bars, config)) != geometry(&c) {
@@ -87,16 +87,15 @@ fn baselines_match_field_by_field() {
             if !ok {
                 diff.mismatches.push(format!("contract error: {text}"));
             } else {
-                diff.compare("contract", "", &got, &doc["response"]);
+                diff.compare("contract", &got, &doc["response"]);
             }
         }
 
         failed |= !diff.mismatches.is_empty();
         report.push(format!(
-            "{name}: mismatches={} macd_values={} macd_not_bit_exact={}{}",
+            "{name}: mismatches={} floats_bit_equal_checked={}{}",
             diff.mismatches.len(),
-            diff.tolerant_values,
-            diff.tolerant_inexact,
+            diff.floats,
             diff.mismatches
                 .iter()
                 .map(|m| format!("\n    {m}"))

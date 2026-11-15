@@ -4,7 +4,7 @@ The only owner of the engine's objects, definitions and output fields. Implement
 
 ## Input
 
-A `RawBar` has `dt`, `high`, `low`, `close` and `vol`. `dt` is the exchange-local wall clock without a zone; every output time is the same wall clock written as a naive ISO string (`2026-03-02T09:35:00`). Prices and volume are used in the caller's units. The engine has no notion of symbol or period: the same rules apply to every series.
+A `RawBar` has `dt`, `high`, `low`, `close` and `vol` (input format and ranges: [cli-contract.md](cli-contract.md#request)). `dt` is the exchange-local wall clock without a zone; every output time is the same wall clock written as a naive ISO string (`2026-03-02T09:35:00`). Prices and volume are used in the caller's units. The engine has no notion of symbol or period: the same rules apply to every series.
 
 Bars are fed one at a time with non-decreasing `dt`; deduplication and corrections belong to the caller. A bar whose `dt` equals the previous input's `dt` fully replaces it: the engine restores the exact state before that input (unfinished bars, strokes, retention pruning) and then applies the new version. Feeding several revisions of one time equals feeding only the last one. Only the latest input can be revised. Batch construction is the same per-bar loop, so it always equals incremental updates.
 
@@ -31,7 +31,7 @@ The fractal list is every stroke's fractals except each stroke's first, then the
 
 ## Strokes
 
-**Search.** On a NewBar window, find all fractals. The first fractal `A` fixes the direction (bottom → up stroke `向上`, top → down stroke `向下`). The end `B` is the most extreme opposite fractal after `A` that is beyond it (for an up stroke: a top with price above `A`'s and the highest high; the first wins ties). The stroke spans NewBars from `A`'s first bar to `B`'s third bar. It forms only when that span has at least `min_bi_len` NewBars (default 6) and the two fractals are not in inclusion (one fractal's range strictly inside the other's). The remaining unfinished window starts at `B`'s first NewBar.
+**Search.** On a NewBar window, find all fractals. The first fractal `A` fixes the direction (bottom → up stroke `向上`, top → down stroke `向下`). The end `B` is the most extreme opposite fractal after `A` that is beyond it (for an up stroke: a top with price above `A`'s and the highest high; the first wins ties). The stroke spans NewBars from `A`'s first bar to `B`'s third bar. It forms only when that span has at least `min_stroke_bars` NewBars (default 6) and the two fractals are not in inclusion (one fractal's range strictly inside the other's). The remaining unfinished window starts at `B`'s first NewBar.
 
 **First stroke.** Before any stroke exists, the start is the most extreme fractal of the first fractal's mark (later fractals win ties); the window is cut to start at that fractal's first NewBar, then searched.
 
@@ -39,13 +39,13 @@ The fractal list is every stroke's fractals except each stroke's first, then the
 
 **Withdrawal.** After the search, if the latest unfinished NewBar is beyond the last stroke's end (higher than its high for an up stroke, lower than its low for a down stroke), the last stroke is removed and the unfinished window becomes that stroke's NewBars without its last two, followed by the current unfinished NewBars from the stroke's second-to-last NewBar onward. Only the latest NewBar is tested, and the search is not repeated in the same input.
 
-**Retention.** At most `max_bi_num` strokes are kept (default 50); older ones are dropped, and raw bars before the first retained stroke's first raw bar are dropped with them. MACD, power and indices are computed over what is retained.
+**Retention.** At most `max_strokes` strokes are kept (default 50); older ones are dropped, and raw bars before the first retained stroke's first raw bar are dropped with them. MACD, power and indices are computed over what is retained.
 
 **Finished strokes.** The last stroke does not count as finished while fewer than five unfinished NewBars follow it. This only selects centre members; any stroke may still be revised.
 
 **Unfinished direction.** Once there is a stroke and the unfinished window holds a fractal, the unfinished direction is opposite to the last stroke.
 
-The command line uses the defaults `max_bi_num = 50`, `min_bi_len = 6`; the library `Config` sets them.
+The command line uses the defaults `max_strokes = 50`, `min_stroke_bars = 6`; the library `Config` sets them.
 
 ## Centres
 

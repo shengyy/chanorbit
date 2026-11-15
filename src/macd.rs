@@ -10,7 +10,7 @@ pub const LOOKBACK: usize = 33;
 pub struct MacdSeries {
     pub dif: Vec<f64>,
     pub dea: Vec<f64>,
-    pub macd: Vec<f64>,
+    pub hist: Vec<f64>,
 }
 
 fn ema_sma_seed(series: &[f64], n: usize) -> Vec<f64> {
@@ -40,12 +40,12 @@ fn ema_after_leading_nan(series: &[f64], n: usize) -> Vec<f64> {
 
 /// TA-Lib convention: the short EMA starts at `long - short` so both EMAs
 /// seed on the same bar.
-pub fn calc_macd(series: &[f64], short: usize, long: usize, m: usize) -> MacdSeries {
+pub fn macd_series(series: &[f64], short: usize, long: usize, m: usize) -> MacdSeries {
     let len = series.len();
     let mut out = MacdSeries {
         dif: vec![f64::NAN; len],
         dea: vec![f64::NAN; len],
-        macd: vec![f64::NAN; len],
+        hist: vec![f64::NAN; len],
     };
     if len == 0 || short == 0 || long == 0 || m == 0 || len < long {
         return out;
@@ -64,7 +64,7 @@ pub fn calc_macd(series: &[f64], short: usize, long: usize, m: usize) -> MacdSer
     for i in 0..len {
         if dif_raw[i].is_finite() && dea[i].is_finite() {
             out.dif[i] = dif_raw[i];
-            out.macd[i] = dif_raw[i] - dea[i];
+            out.hist[i] = dif_raw[i] - dea[i];
         }
     }
     out.dea = dea;
@@ -72,8 +72,8 @@ pub fn calc_macd(series: &[f64], short: usize, long: usize, m: usize) -> MacdSer
 }
 
 /// MACD(12, 26, 9) of the analyzer's retained raw bars.
-pub fn native_macd(c: &Analyzer) -> MacdSeries {
-    let closes: Vec<f64> = c.bars_raw().iter().map(|b| b.close).collect();
+pub fn retained_macd(c: &Analyzer) -> MacdSeries {
+    let closes: Vec<f64> = c.raw_bars().iter().map(|b| b.close).collect();
     let [short, long, m] = PARAMS;
-    calc_macd(&closes, short, long, m)
+    macd_series(&closes, short, long, m)
 }

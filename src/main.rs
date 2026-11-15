@@ -1,10 +1,10 @@
 //! `chanorbit` command line: JSON on stdin, JSON on stdout. See docs/cli-contract.md.
-use chanorbit::contract::{SCHEMA, handle};
-use std::io::{BufRead, Read, Write};
+use chanorbit::contract::{SCHEMA, handle_bytes};
+use std::io::{Read, Write};
 use std::process::ExitCode;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-const USAGE: &str = "usage: chanorbit geometry [--batch] [--jobs N]\n       chanorbit --version\n       chanorbit --help";
+const USAGE: &str = "usage: chanorbit geometry [--batch [--jobs N]]\n       chanorbit --version\n       chanorbit --help";
 
 /// All responses written and successful.
 const EXIT_OK: u8 = 0;
@@ -17,7 +17,7 @@ const EXIT_IO: u8 = 3;
 
 struct Args {
     batch: bool,
-    jobs: usize,
+    jobs: Option<usize>,
 }
 
 fn parse_args(args: &[String]) -> Result<Option<Args>, String> {
@@ -33,7 +33,7 @@ fn parse_args(args: &[String]) -> Result<Option<Args>, String> {
         Some("geometry") => {
             let mut parsed = Args {
                 batch: false,
-                jobs: std::thread::available_parallelism().map_or(1, |n| n.get()),
+                jobs: None,
             };
             let mut rest = args[1..].iter();
             while let Some(arg) = rest.next() {
@@ -42,12 +42,15 @@ fn parse_args(args: &[String]) -> Result<Option<Args>, String> {
                     "--jobs" => {
                         let value = rest.next().ok_or("--jobs needs a value")?;
                         parsed.jobs =
-                            value.parse().ok().filter(|&n| n > 0).ok_or_else(|| {
+                            Some(value.parse().ok().filter(|&n| n > 0).ok_or_else(|| {
                                 format!("--jobs: not a positive integer: {value}")
-                            })?;
+                            })?);
                     }
                     other => return Err(format!("unknown argument: {other}")),
                 }
+            }
+            if parsed.jobs.is_some() && !parsed.batch {
+                return Err("--jobs needs --batch".into());
             }
             Ok(Some(parsed))
         }
@@ -57,7 +60,7 @@ fn parse_args(args: &[String]) -> Result<Option<Args>, String> {
 }
 
 /// Handle lines in parallel; results keep input order.
-fn handle_lines(lines: &[String], jobs: usize) -> Vec<(String, bool)> {
+fn handle_lines(lines: &[&[u8]], jobs: usize) -> Vec<(String, bool)> {
     let next = AtomicUsize::new(0);
     let mut results: Vec<Option<(String, bool)>> = vec![None; lines.len()];
     let workers = jobs.min(lines.len()).max(1);
@@ -69,7 +72,7 @@ fn handle_lines(lines: &[String], jobs: usize) -> Vec<(String, bool)> {
                     loop {
                         let i = next.fetch_add(1, Ordering::Relaxed);
                         let Some(line) = lines.get(i) else { break };
-                        done.push((i, handle(line)));
+                        done.push((i, handle_bytes(line)));
                     }
                     done
                 })
@@ -90,23 +93,24 @@ fn handle_lines(lines: &[String], jobs: usize) -> Vec<(String, bool)> {
 }
 
 fn run(args: Args) -> Result<bool, String> {
-    let stdin = std::io::stdin();
+    let mut input = Vec::new();
+    std::io::stdin()
+        .lock()
+        .read_to_end(&mut input)
+        .map_err(|e| format!("reading stdin: {e}"))?;
     let results = if args.batch {
-        let mut lines = Vec::new();
-        for line in stdin.lock().lines() {
-            let line = line.map_err(|e| format!("reading stdin: {e}"))?;
-            if !line.trim().is_empty() {
-                lines.push(line);
-            }
-        }
-        handle_lines(&lines, args.jobs)
+        // Lines are split on bytes, so one line that is not UTF-8 fails alone.
+        let lines: Vec<&[u8]> = input
+            .split(|&b| b == b'\n')
+            .map(|l| l.strip_suffix(b"\r").unwrap_or(l))
+            .filter(|l| !l.iter().all(u8::is_ascii_whitespace))
+            .collect();
+        let jobs = args
+            .jobs
+            .unwrap_or_else(|| std::thread::available_parallelism().map_or(1, |n| n.get()));
+        handle_lines(&lines, jobs)
     } else {
-        let mut text = String::new();
-        stdin
-            .lock()
-            .read_to_string(&mut text)
-            .map_err(|e| format!("reading stdin: {e}"))?;
-        vec![handle(&text)]
+        vec![handle_bytes(&input)]
     };
     let mut out = std::io::BufWriter::new(std::io::stdout().lock());
     let mut ok = true;

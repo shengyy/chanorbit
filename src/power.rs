@@ -40,7 +40,7 @@ pub fn interval_power(
     start: NaiveDateTime,
     end: NaiveDateTime,
 ) -> Power {
-    let raw = c.bars_raw();
+    let raw = c.raw_bars();
     let rows: Vec<usize> = (0..raw.len())
         .filter(|&i| raw[i].dt > start && raw[i].dt <= end)
         .collect();
@@ -50,13 +50,13 @@ pub fn interval_power(
     let ready = |i: usize| {
         s.dif.get(i).is_some_and(|x| x.is_finite())
             && s.dea.get(i).is_some_and(|x| x.is_finite())
-            && s.macd.get(i).is_some_and(|x| x.is_finite())
+            && s.hist.get(i).is_some_and(|x| x.is_finite())
     };
     let ready_count = rows.iter().filter(|&&i| ready(i)).count();
     let coverage = start < end
         && at(start).is_some()
         && at(end).is_some()
-        && s.macd.len() == raw.len()
+        && s.hist.len() == raw.len()
         && raw.windows(2).all(|w| w[0].dt < w[1].dt);
     let non_finite = raw
         .iter()
@@ -80,9 +80,9 @@ pub fn interval_power(
             rows.iter()
                 .map(|&i| {
                     if positive {
-                        s.macd[i].max(0.)
+                        s.hist[i].max(0.)
                     } else {
-                        (-s.macd[i]).max(0.)
+                        (-s.hist[i]).max(0.)
                     }
                 })
                 .sum(),
@@ -125,14 +125,14 @@ pub fn interval_power(
 
 /// Stroke power; a raw bar the stroke snapshot holds inside `(sdt, edt]` that
 /// is no longer retained makes areas and the mean volume unavailable.
-pub fn bi_power(c: &Analyzer, s: &MacdSeries, bi: &Stroke) -> Power {
-    let mut power = interval_power(c, s, bi.fx_a.dt, bi.fx_b.dt);
-    let raw = c.bars_raw();
-    let missing = bi
-        .bars
+pub fn stroke_power(c: &Analyzer, s: &MacdSeries, stroke: &Stroke) -> Power {
+    let mut power = interval_power(c, s, stroke.start_fractal.dt, stroke.end_fractal.dt);
+    let raw = c.raw_bars();
+    let missing = stroke
+        .newbars
         .iter()
         .flat_map(|b| &b.elements)
-        .filter(|b| b.dt > bi.fx_a.dt && b.dt <= bi.fx_b.dt)
+        .filter(|b| b.dt > stroke.start_fractal.dt && b.dt <= stroke.end_fractal.dt)
         .any(|b| raw.binary_search_by_key(&b.dt, |r| r.dt).is_err());
     if missing {
         power.macd.status = "unavailable".into();
@@ -214,14 +214,14 @@ pub fn macd_segments(bars: &[MacdBar]) -> Vec<MacdSegment> {
 impl MacdFacts {
     pub fn capture(c: &Analyzer, s: &MacdSeries) -> Self {
         let bars: Vec<MacdBar> = c
-            .bars_raw()
+            .raw_bars()
             .iter()
             .enumerate()
             .map(|(i, b)| MacdBar {
                 dt: b.dt,
                 dif: s.dif.get(i).copied().and_then(finite),
                 dea: s.dea.get(i).copied().and_then(finite),
-                hist: s.macd.get(i).copied().and_then(finite),
+                hist: s.hist.get(i).copied().and_then(finite),
             })
             .collect();
         Self {

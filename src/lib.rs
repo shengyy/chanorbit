@@ -17,7 +17,7 @@ pub mod stroke;
 pub use analyzer::{Analyzer, Config};
 pub use bar::{NewBar, RawBar};
 pub use candidate::CandidateStroke;
-pub use centre::{Centre, zs_seq};
+pub use centre::{Centre, canonical_centres};
 pub use fractal::{Fractal, Mark};
 pub use geometry::{Geometry, geometry};
 pub use stroke::{Direction, Stroke};

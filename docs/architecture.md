@@ -23,7 +23,7 @@ One crate, `chanorbit`: a library (`src/lib.rs`) holding the engine and the JSON
 ```text
 columnar request ─► contract::run ─► RawBar ─► Analyzer::update (per bar)
                                                   │  inclusion ─► NewBar window
-                                                  │  stroke search / withdrawal ─► bi_list
+                                                  │  stroke search / withdrawal ─► strokes
                                                   │  retention pruning
                                                   ▼
                          geometry::geometry: strokes + power, fractals, centres,
@@ -32,6 +32,8 @@ columnar request ─► contract::run ─► RawBar ─► Analyzer::update (per
 
 Strokes, fractals and the unfinished window share NewBars through `Arc`: a merge replaces the last NewBar with a new allocation, so earlier snapshots stay immutable. The undo record for same-dt revision holds only the latest input's prior window, removed stroke and pruned items.
 
-Later layers (buy/sell stages, per-prefix observation) build on the library: `Analyzer::update` for per-bar state, `Analyzer::bi_list`/`finished_bis`, `centre::zs_seq`, `candidate::candidate_stroke`, `macd::native_macd` and `power::interval_power`. The command line exposes only the snapshot.
+Later layers (buy/sell stages, per-prefix observation) build on the library: `Analyzer::update` for per-bar state, `Analyzer::strokes`/`finished_strokes`/`pending_bars`, `centre::canonical_centres`, `candidate::candidate_stroke`, `macd::retained_macd` and `power::interval_power`. The command line exposes only the snapshot.
 
-Batch mode reads all lines, hands them to scoped worker threads through an atomic index and writes results in input order.
+Every input clones the pending window and repeats the fractal scan and stroke search over it. While a stroke keeps forming the window stays short; a series that forms no stroke for its whole length makes the work grow quadratically with its length (tens of thousands of bars take seconds). This is the current state and is bounded only by the request length limit.
+
+Batch mode reads all of stdin, splits it into byte lines, hands them to scoped worker threads through an atomic index and writes results in input order.

@@ -55,16 +55,31 @@ fn error(id: Value, kind: &str, message: impl Into<String>) -> ErrorResponse {
     }
 }
 
-/// Parse an exchange-local wall-clock time. A zone suffix is rejected.
+/// Most bars accepted in one request.
+pub const MAX_BARS: usize = 200_000;
+/// Prices must lie in `(0, MAX_PRICE]`.
+pub const MAX_PRICE: f64 = 1e9;
+/// Volumes must lie in `[0, MAX_VOLUME]`.
+pub const MAX_VOLUME: f64 = 1e15;
+
+/// Parse an exchange-local wall-clock time written exactly as
+/// `YYYY-MM-DDTHH:MM:SS` (no fraction, no zone, no padding variants).
 pub fn parse_dt(text: &str) -> Option<NaiveDateTime> {
-    for format in ["%Y-%m-%dT%H:%M:%S%.f", "%Y-%m-%d %H:%M:%S%.f"] {
-        if let Ok(dt) = NaiveDateTime::parse_from_str(text, format) {
-            return Some(dt);
-        }
+    let b = text.as_bytes();
+    let digits = [0, 1, 2, 3, 5, 6, 8, 9, 11, 12, 14, 15, 17, 18];
+    let shape = b.len() == 19
+        && digits.iter().all(|&i| b[i].is_ascii_digit())
+        && b[4] == b'-'
+        && b[7] == b'-'
+        && b[10] == b'T'
+        && b[13] == b':'
+        && b[16] == b':';
+    if !shape {
+        return None;
     }
-    chrono::NaiveDate::parse_from_str(text, "%Y-%m-%d")
-        .ok()
-        .and_then(|d| d.and_hms_opt(0, 0, 0))
+    let dt = NaiveDateTime::parse_from_str(text, "%Y-%m-%dT%H:%M:%S").ok()?;
+    // A leap second (`:60`) parses as a fraction; reject it.
+    (dt.and_utc().timestamp_subsec_nanos() == 0).then_some(dt)
 }
 
 impl Request {
@@ -74,6 +89,12 @@ impl Request {
         let n = self.dt.len();
         if n == 0 {
             return Err(("invalid_request", "dt is empty".into()));
+        }
+        if n > MAX_BARS {
+            return Err((
+                "invalid_input",
+                format!("{n} bars exceed the limit of {MAX_BARS}"),
+            ));
         }
         for (name, len) in [
             ("high", self.high.len()),
@@ -94,9 +115,27 @@ impl Request {
                 let dt = parse_dt(&self.dt[i]).ok_or_else(|| {
                     (
                         "invalid_bar",
-                        format!("dt[{i}]: not a naive ISO time: {}", self.dt[i]),
+                        format!("dt[{i}]: not YYYY-MM-DDTHH:MM:SS: {}", self.dt[i]),
                     )
                 })?;
+                for (name, value) in [
+                    ("high", self.high[i]),
+                    ("low", self.low[i]),
+                    ("close", self.close[i]),
+                ] {
+                    if !(value > 0.0 && value <= MAX_PRICE) {
+                        return Err((
+                            "invalid_bar",
+                            format!("{name}[{i}]: {value} outside (0, {MAX_PRICE:e}]"),
+                        ));
+                    }
+                }
+                if !(self.vol[i] >= 0.0 && self.vol[i] <= MAX_VOLUME) {
+                    return Err((
+                        "invalid_bar",
+                        format!("vol[{i}]: {} outside [0, {MAX_VOLUME:e}]", self.vol[i]),
+                    ));
+                }
                 if previous.is_some_and(|p| dt < p) {
                     return Err((
                         "invalid_bar",
@@ -136,23 +175,41 @@ pub fn run(req: Request) -> Result<Response, ErrorResponse> {
     ))
 }
 
+fn first_byte_is_brace(text: &str) -> bool {
+    text.trim_start_matches([' ', '\t', '\n', '\r'])
+        .starts_with('{')
+}
+
 /// One request text in, one compact JSON line out (no trailing newline).
 /// Returns whether the response is a success.
 pub fn handle(text: &str) -> (String, bool) {
-    let result = match serde_json::from_str::<Request>(text) {
-        Ok(req) => run(req),
-        Err(e) => {
-            // Keep the caller's id when the outer object is readable.
-            let id = serde_json::from_str::<Value>(text)
-                .ok()
-                .and_then(|v| v.get("id").cloned())
-                .unwrap_or(Value::Null);
-            let kind = if e.is_syntax() || e.is_eof() {
-                "invalid_json"
-            } else {
-                "invalid_request"
-            };
-            Err(error(id, kind, e.to_string()))
+    let result = if !first_byte_is_brace(text) {
+        let kind = if serde_json::from_str::<Value>(text).is_ok() {
+            "invalid_input"
+        } else {
+            "invalid_json"
+        };
+        Err(error(
+            Value::Null,
+            kind,
+            "a request must be one JSON object",
+        ))
+    } else {
+        match serde_json::from_str::<Request>(text) {
+            Ok(req) => run(req),
+            Err(e) => {
+                // Keep the caller's id when the outer object is readable.
+                let id = serde_json::from_str::<Value>(text)
+                    .ok()
+                    .and_then(|v| v.get("id").cloned())
+                    .unwrap_or(Value::Null);
+                let kind = if e.is_syntax() || e.is_eof() {
+                    "invalid_json"
+                } else {
+                    "invalid_request"
+                };
+                Err(error(id, kind, e.to_string()))
+            }
         }
     };
     match result {
@@ -161,5 +218,21 @@ pub fn handle(text: &str) -> (String, bool) {
             true,
         ),
         Err(e) => (serde_json::to_string(&e).expect("error serializes"), false),
+    }
+}
+
+/// [`handle`] for raw bytes; text that is not UTF-8 is an `invalid_json` error.
+pub fn handle_bytes(bytes: &[u8]) -> (String, bool) {
+    match std::str::from_utf8(bytes) {
+        Ok(text) => handle(text),
+        Err(e) => (
+            serde_json::to_string(&error(
+                Value::Null,
+                "invalid_json",
+                format!("not UTF-8: {e}"),
+            ))
+            .expect("error serializes"),
+            false,
+        ),
     }
 }

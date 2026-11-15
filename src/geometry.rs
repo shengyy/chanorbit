@@ -2,10 +2,10 @@
 //! candidate and MACD. No buy/sell stage is evaluated here.
 use crate::analyzer::Analyzer;
 use crate::candidate::{CandidateStroke, candidate_stroke};
-use crate::centre::zs_seq;
+use crate::centre::canonical_centres;
 use crate::fractal::{Fractal, Mark};
-use crate::macd::native_macd;
-use crate::power::{MacdFacts, Power, bi_power, interval_power};
+use crate::macd::retained_macd;
+use crate::power::{MacdFacts, Power, interval_power, stroke_power};
 use crate::stroke::Direction;
 use chrono::NaiveDateTime;
 use serde::{Deserialize, Serialize};
@@ -24,7 +24,7 @@ pub struct StrokeFact {
     /// `|end_price - start_price|` rounded to two decimals.
     pub price_amplitude: f64,
     pub newbar_count: usize,
-    /// Counted as a centre member; see [`Analyzer::finished_len`].
+    /// Counted as a centre member; see [`Analyzer::finished_count`].
     pub included_in_finished_bis: bool,
     pub power: Power,
 }
@@ -42,7 +42,7 @@ impl From<&Fractal> for FractalFact {
         Self {
             dt: f.dt,
             mark: f.mark,
-            price: f.fx,
+            price: f.price,
             confirmed_at: f.confirmed_at(),
         }
     }
@@ -108,10 +108,10 @@ fn relation(al: f64, ah: f64, bl: f64, bh: f64) -> String {
 }
 
 pub fn geometry(c: &Analyzer) -> Geometry {
-    let macd = native_macd(c);
-    let bis = c.bi_list();
-    let finished = c.finished_len();
-    let bi = bis
+    let macd = retained_macd(c);
+    let strokes = c.strokes();
+    let finished = c.finished_count();
+    let bi = strokes
         .iter()
         .enumerate()
         .map(|(i, b)| StrokeFact {
@@ -120,18 +120,19 @@ pub fn geometry(c: &Analyzer) -> Geometry {
             edt: b.edt(),
             high: b.high(),
             low: b.low(),
-            start_price: b.fx_a.fx,
-            end_price: b.fx_b.fx,
-            price_amplitude: b.power_price(),
-            newbar_count: b.length(),
+            start_price: b.start_fractal.price,
+            end_price: b.end_fractal.price,
+            price_amplitude: b.amplitude(),
+            newbar_count: b.newbar_count(),
             included_in_finished_bis: i < finished,
-            power: bi_power(c, &macd, b),
+            power: stroke_power(c, &macd, b),
         })
         .collect();
-    let finished_bis = &bis[..finished];
-    let centres = zs_seq(finished_bis);
-    let mut qualified = (0..centres.len())
-        .filter(|&i| centres[i].bi_count() >= 3 && centres[i].is_valid(finished_bis));
+    let finished_strokes = &strokes[..finished];
+    let centres = canonical_centres(finished_strokes);
+    let mut qualified = (0..centres.len()).filter(|&i| {
+        centres[i].member_count() >= 3 && centres[i].members_touch_core(finished_strokes)
+    });
     let latest_finished_zs = qualified.next_back();
     let previous_zs = qualified.next_back();
     let centre_sequence: Vec<CentreFact> = centres
@@ -139,12 +140,12 @@ pub fn geometry(c: &Analyzer) -> Geometry {
         .map(|z| CentreFact {
             sdt: z.sdt,
             edt: z.edt,
-            zd: z.zd,
-            zg: z.zg,
-            zz: z.zz,
-            dd: z.dd,
-            gg: z.gg,
-            bi_count: z.bi_count(),
+            zd: z.core_low,
+            zg: z.core_high,
+            zz: z.core_mid,
+            dd: z.low,
+            gg: z.high,
+            bi_count: z.member_count(),
             member_indices: (z.start..z.end).collect(),
             entry_index: z.start - 1,
         })
@@ -156,9 +157,9 @@ pub fn geometry(c: &Analyzer) -> Geometry {
             outer: relation(a.dd, a.gg, b.dd, b.gg),
         }
     });
-    let since = bis.len().checked_sub(2).map(|i| bis[i].sdt());
+    let since = strokes.len().checked_sub(2).map(|i| strokes[i].sdt());
     let fractals = c
-        .fx_list()
+        .fractals()
         .iter()
         .filter(|f| since.is_none_or(|s| f.dt >= s))
         .map(FractalFact::from)
@@ -174,18 +175,18 @@ pub fn geometry(c: &Analyzer) -> Geometry {
             None
         }
     };
-    let candidate_power = window(c.bars_raw().last().map(|b| b.dt));
+    let candidate_power = window(c.raw_bars().last().map(|b| b.dt));
     let candidate_endpoint_power = window(candidate.end_price_at);
     Geometry {
-        status: if bis.is_empty() {
+        status: if strokes.is_empty() {
             "missing_material"
         } else {
             "ready"
         }
         .into(),
         bi,
-        ubi_direction: c.ubi_direction(),
-        ubi_newbar_count: c.bars_ubi().len(),
+        ubi_direction: c.pending_direction(),
+        ubi_newbar_count: c.pending_bars().len(),
         fractals,
         centre_sequence,
         previous_zs,

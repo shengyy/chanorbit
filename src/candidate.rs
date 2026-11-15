@@ -46,31 +46,31 @@ pub fn candidate_stroke(c: &Analyzer) -> CandidateStroke {
         end_price: None,
         end_price_at: None,
     };
-    let Some(bi) = c.bi_list().last() else {
+    let Some(stroke) = c.strokes().last() else {
         return result;
     };
-    let anchor = &bi.fx_b;
-    let up = bi.direction == Direction::Up;
+    let anchor = &stroke.end_fractal;
+    let up = stroke.direction == Direction::Up;
     result.anchor_at = Some(anchor.dt);
-    result.anchor_price = anchor.fx.is_finite().then_some(anchor.fx);
+    result.anchor_price = anchor.price.is_finite().then_some(anchor.price);
     let owners: Vec<_> = anchor
         .elements
         .iter()
         .flat_map(|b| &b.elements)
-        .filter(|b| (if up { b.high } else { b.low }) == anchor.fx)
+        .filter(|b| (if up { b.high } else { b.low }) == anchor.price)
         .collect();
     let Some(owner) = owners.iter().find(|b| b.dt == anchor.dt).or(owners.first()) else {
         return result.unavailable("anchor_price_source_missing");
     };
     result.anchor_price_at = Some(owner.dt);
-    let ubi = c.bars_ubi();
-    let Some(central) = ubi
+    let pending = c.pending_bars();
+    let Some(central) = pending
         .iter()
         .position(|b| b.dt == anchor.dt || b.elements.iter().any(|r| r.dt == anchor.dt))
     else {
         return result.unavailable("anchor_not_in_engine_tail");
     };
-    let extension = c.last_bi_extend();
+    let extension = c.last_stroke_extends();
     let forward_up = if extension { up } else { !up };
     result.kind = Some(if extension { "extension" } else { "reverse" }.into());
     result.direction = Some(if forward_up {
@@ -78,8 +78,8 @@ pub fn candidate_stroke(c: &Analyzer) -> CandidateStroke {
     } else {
         Direction::Down
     });
-    let eligible = &ubi[central + usize::from(!extension)..];
-    if !anchor.fx.is_finite()
+    let eligible = &pending[central + usize::from(!extension)..];
+    if !anchor.price.is_finite()
         || eligible
             .iter()
             .any(|b| !b.high.is_finite() || !b.low.is_finite())
@@ -91,9 +91,9 @@ pub fn candidate_stroke(c: &Analyzer) -> CandidateStroke {
         .iter()
         .filter(|b| {
             if forward_up {
-                b.high > anchor.fx
+                b.high > anchor.price
             } else {
-                b.low < anchor.fx
+                b.low < anchor.price
             }
         })
         .reduce(|a, b| {
@@ -117,7 +117,7 @@ pub fn candidate_stroke(c: &Analyzer) -> CandidateStroke {
     let Some(owner) = owners.iter().find(|b| b.dt == end.dt).or(owners.first()) else {
         return result.unavailable("no_forward_price_source");
     };
-    let raw = c.bars_raw();
+    let raw = c.raw_bars();
     if !raw
         .iter()
         .any(|b| b.dt == owner.dt && (if forward_up { b.high } else { b.low }) == price)

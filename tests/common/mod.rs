@@ -30,8 +30,8 @@ pub fn load(path: &Path) -> Value {
 pub fn input(doc: &Value) -> (Vec<RawBar>, Config) {
     let req: Request = serde_json::from_value(doc["request"].clone()).unwrap();
     let config = Config {
-        max_bi_num: doc["config"]["max_bi_num"].as_u64().unwrap() as usize,
-        min_bi_len: doc["config"]["min_bi_len"].as_u64().unwrap() as usize,
+        max_strokes: doc["config"]["max_strokes"].as_u64().unwrap() as usize,
+        min_stroke_bars: doc["config"]["min_stroke_bars"].as_u64().unwrap() as usize,
     };
     (req.bars().unwrap(), config)
 }
@@ -41,25 +41,17 @@ pub fn default_config(doc: &Value) -> bool {
     input(doc).1 == Config::default()
 }
 
-/// MACD-derived values (EMA chains and their sums) compare with a relative
-/// tolerance of 1e-9; every other number must be equal.
-fn tolerant(key: &str) -> bool {
-    key.starts_with("dif")
-        || key.starts_with("dea")
-        || key.starts_with("hist")
-        || key.ends_with("_area")
-        || key == "peak"
-}
-
+/// Strict comparison: same keys, same lengths, same JSON types (an integer
+/// never equals a float, a boolean never equals a number) and floats equal
+/// bit for bit. No tolerance.
 #[derive(Default, Debug)]
 pub struct Diff {
     pub mismatches: Vec<String>,
-    pub tolerant_values: usize,
-    pub tolerant_inexact: usize,
+    pub floats: usize,
 }
 
 impl Diff {
-    pub fn compare(&mut self, path: &str, key: &str, got: &Value, want: &Value) {
+    pub fn compare(&mut self, path: &str, got: &Value, want: &Value) {
         if self.mismatches.len() >= 20 {
             return;
         }
@@ -73,7 +65,7 @@ impl Diff {
                     }
                 }
                 for (k, wv) in w {
-                    self.compare(&format!("{path}.{k}"), k, &g[k], wv);
+                    self.compare(&format!("{path}.{k}"), &g[k], wv);
                 }
             }
             (Value::Array(g), Value::Array(w)) => {
@@ -86,21 +78,20 @@ impl Diff {
                     return;
                 }
                 for (i, (gv, wv)) in g.iter().zip(w).enumerate() {
-                    self.compare(&format!("{path}[{i}]"), key, gv, wv);
+                    self.compare(&format!("{path}[{i}]"), gv, wv);
                 }
             }
             (Value::Number(g), Value::Number(w)) => {
-                let (a, b) = (g.as_f64().unwrap(), w.as_f64().unwrap());
-                if tolerant(key) {
-                    self.tolerant_values += 1;
-                    if a.to_bits() != b.to_bits() {
-                        self.tolerant_inexact += 1;
+                let same = match (g.as_f64(), g.is_f64(), w.is_f64()) {
+                    (Some(a), true, true) => {
+                        self.floats += 1;
+                        a.to_bits() == w.as_f64().unwrap().to_bits()
                     }
-                    if (a - b).abs() > 1e-9 * a.abs().max(b.abs()) {
-                        self.mismatches.push(format!("{path}: {a} vs expected {b}"));
-                    }
-                } else if a != b {
-                    self.mismatches.push(format!("{path}: {a} vs expected {b}"));
+                    (_, false, false) => g == w,
+                    _ => false,
+                };
+                if !same {
+                    self.mismatches.push(format!("{path}: {g} vs expected {w}"));
                 }
             }
             _ => {
