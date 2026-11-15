@@ -604,10 +604,28 @@ impl Level {
         // The path starts at the third member's end price, then its raw bars.
         let start_met = position(self.strokes[third].end_price, zd, zg) != end_side;
         let above = end_side == "above";
-        // The exit is the bar after the last point off the end side (that
-        // point itself when it is the last bar).
+        let exit_direction = if above {
+            Direction::Up
+        } else {
+            Direction::Down
+        };
+        // The exit is the last bar touching the core when it closes beyond
+        // the edge and the element holding it runs in the exit direction;
+        // otherwise the bar after it (that bar itself when it is the last).
         let star = match path.iter().rposition(|b| side(b, zd, zg) != end_side) {
-            Some(i) => path.get(i + 1).or(path.get(i)),
+            Some(i) => {
+                let b = &path[i];
+                let closed_out = if above { b.close > zg } else { b.close < zd };
+                let runs_out = segs
+                    .iter()
+                    .find(|s| s.start_at < b.dt && b.dt <= s.end_at)
+                    .is_some_and(|s| s.direction == exit_direction);
+                if closed_out && runs_out {
+                    Some(b)
+                } else {
+                    path.get(i + 1).or(Some(b))
+                }
+            }
             None if start_met => path.first(),
             None => None,
         };
@@ -630,11 +648,6 @@ impl Level {
         };
         let j = containing(exit.dt);
         let x = segs[j];
-        let exit_direction = if above {
-            Direction::Up
-        } else {
-            Direction::Down
-        };
         let retest = match x.pos {
             Pos::Stroke(_) => segs
                 .get(j + 1)
