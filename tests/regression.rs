@@ -19,8 +19,8 @@ fn trace_row(c: &Analyzer) -> Value {
         c.strokes().len(),
         c.pending_bars().len(),
         c.raw_bars().len(),
-        last.map(|b| iso(b.sdt())),
-        last.map(|b| iso(b.edt())),
+        last.map(|b| iso(b.start_at())),
+        last.map(|b| iso(b.end_at())),
         c.fractals().len(),
         c.finished_count(),
         cand.state

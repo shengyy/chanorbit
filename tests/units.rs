@@ -81,7 +81,7 @@ fn zero_continues_a_run_and_missing_closes_it() {
         .collect();
     let rows: Vec<_> = macd_segments(&bars)
         .iter()
-        .map(|s| (s.sign, s.sdt, s.edt, s.bars, s.peak, s.peak_at))
+        .map(|s| (s.sign, s.start_at, s.end_at, s.bars, s.peak, s.peak_at))
         .collect();
     assert_eq!(
         rows,

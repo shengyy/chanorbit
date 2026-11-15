@@ -132,8 +132,8 @@ impl Analyzer {
             tail.pruned_strokes = self.strokes.drain(..excess).collect();
         }
         if let Some(first) = self.strokes.first() {
-            let sdt = first.start_fractal.elements[0].dt;
-            let keep_from = self.raw_bars.partition_point(|b| b.dt < sdt);
+            let start_at = first.start_fractal.elements[0].dt;
+            let keep_from = self.raw_bars.partition_point(|b| b.dt < start_at);
             tail.pruned_raw = self.raw_bars.drain(..keep_from).collect();
         }
         self.tail = tail;

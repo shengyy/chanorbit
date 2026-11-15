@@ -49,7 +49,7 @@ The command line uses the defaults `max_strokes = 50`, `min_stroke_bars = 6`; th
 
 ## Centres
 
-A centre over consecutive member strokes has `zg` = lowest high and `zd` = highest low of its **first three** members, `zz` = `zd + (zg - zd) * 0.5`, `gg`/`dd` = highest high / lowest low of all members, `sdt`/`edt` = first member start / last member end. Its members touch the core when `zg ≥ zd` and each member's high or low lies in `[zd, zg]` or the member spans the whole range.
+A centre over consecutive member strokes has `zg` = lowest high and `zd` = highest low of its **first three** members, `zz` = `zd + (zg - zd) * 0.5`, `gg`/`dd` = highest high / lowest low of all members, `start_at`/`end_at` = first member start / last member end. Its members touch the core when `zg ≥ zd` and each member's high or low lies in `[zd, zg]` or the member spans the whole range.
 
 The canonical sequence over the finished strokes:
 
@@ -69,15 +69,15 @@ Segments are maximal runs of same-sign histogram bars: zero continues an open ru
 
 ## Interval power
 
-Power over `(sdt, edt]` uses retained raw bars with `sdt < dt ≤ edt`; their count is `sample_count`. The MACD reason, in order:
+Power over `(start_at, end_at]` uses retained raw bars with `start_at < dt ≤ end_at`; their count is `sample_count`. The MACD reason, in order:
 
-- `missing_coverage`: `sdt ≥ edt`, either endpoint is not a retained raw bar, raw times are not strictly increasing, or no rows.
-- `non_finite`: a non-finite close at or before `edt`.
+- `missing_coverage`: `start_at ≥ end_at`, either endpoint is not a retained raw bar, raw times are not strictly increasing, or no rows.
+- `non_finite`: a non-finite close at or before `end_at`.
 - `warmup`: some row has no MACD value and lies within the first 33 retained bars; otherwise `non_finite`.
 
-When ready, `positive_area` and `negative_area` are the sums of `max(hist, 0)` and `max(-hist, 0)` over the rows. `dif_at_end`/`dea_at_end` are the values at `edt` when present. `ready_count` counts rows with all three MACD values. `mean_volume` needs coverage and rows. Unavailable values are `null`, never 0.
+When ready, `positive_area` and `negative_area` are the sums of `max(hist, 0)` and `max(-hist, 0)` over the rows. `dif_at_end`/`dea_at_end` are the values at `end_at` when present. `ready_count` counts rows with all three MACD values. `mean_volume` needs coverage and rows. Unavailable values are `null`, never 0.
 
-For a stroke the interval is its endpoint fractal times. If a raw bar inside the stroke's NewBars with time in `(sdt, edt]` is no longer retained, areas and `mean_volume` are unavailable with `missing_coverage`.
+For a stroke the interval is its endpoint fractal times. If a raw bar inside the stroke's NewBars with time in `(start_at, end_at]` is no longer retained, areas and `mean_volume` are unavailable with `missing_coverage`.
 
 ## Candidate stroke
 
@@ -96,18 +96,18 @@ Every fact appears once. Field names follow the consumer's vocabulary.
 | Field | Meaning |
 |---|---|
 | `status` | `ready` with at least one stroke, otherwise `missing_material` |
-| `bi` | Every retained stroke, oldest first: `direction`, `sdt`, `edt`, `high`, `low` (endpoint extremes; the path inside can exceed them), `start_price`, `end_price`, `price_amplitude` (`|end_price − start_price|` rounded to two decimals), `newbar_count`, `included_in_finished_bis`, `power` |
-| `ubi_direction` | Unfinished direction, or `null` |
-| `ubi_newbar_count` | NewBars in the unfinished window |
-| `fractals` | Fractal list from the second-to-last stroke's `sdt` on (all of it with fewer than two strokes): `dt`, `mark`, `price`, `confirmed_at` |
-| `centre_sequence` | Canonical centres: `sdt`, `edt`, `zd`, `zg`, `zz`, `dd`, `gg`, `bi_count`, `member_indices` (into `bi`), `entry_index` (the stroke before the first member). The sequence includes tail groups of one or two strokes |
-| `latest_finished_zs`, `previous_zs` | Indices into `centre_sequence` of the last and second-to-last centre with at least three members that touch the core, or `null` |
-| `zs_relation` | When both exist: latest versus previous, `core` on `[zd, zg]` and `outer` on `[dd, gg]`, each `above`, `below`, `touch` or `overlap` |
+| `strokes` | Every retained stroke, oldest first: `direction`, `start_at`, `end_at`, `high`, `low` (endpoint extremes; the path inside can exceed them), `start_price`, `end_price`, `price_amplitude` (`|end_price − start_price|` rounded to two decimals), `newbar_count`, `finished`, `power` |
+| `pending_direction` | Unfinished direction, or `null` |
+| `pending_newbar_count` | NewBars in the unfinished window |
+| `fractals` | Fractal list from the second-to-last stroke's `start_at` on (all of it with fewer than two strokes): `dt`, `mark`, `price`, `confirmed_at` |
+| `centre_sequence` | Canonical centres: `start_at`, `end_at`, `zd`, `zg`, `zz`, `dd`, `gg`, `member_count`, `member_indices` (into `strokes`), `entry_index` (the stroke before the first member). The sequence includes tail groups of one or two strokes |
+| `latest_centre`, `previous_centre` | Indices into `centre_sequence` of the last and second-to-last centre with at least three members that touch the core, or `null` |
+| `centre_relation` | When both exist: latest versus previous, `core` on `[zd, zg]` and `outer` on `[dd, gg]`, each `above`, `below`, `touch` or `overlap` |
 | `candidate_stroke` | `state`, `reason`, `kind`, `direction`, `anchor_at`, `anchor_price`, `anchor_price_at`, `end_price`, `end_price_at` |
 | `candidate_power` | Power over `(anchor_at, last input dt]` of an available candidate, or `null` |
 | `candidate_endpoint_power` | Power over `(anchor_at, end_price_at]` of an available candidate, or `null` |
 | `macd.bars` | Every retained raw bar: `dt`, `dif`, `dea`, `hist` (`null` when not finite) |
-| `macd.segments` | `sign`, `sdt`, `edt`, `bars`, `peak`, `peak_at` |
+| `macd.segments` | `sign`, `start_at`, `end_at`, `bars`, `peak`, `peak_at` |
 | power | `sample_count`, `mean_volume`, `macd`: `status` (`ready`/`unavailable`), `reason`, `positive_area`, `negative_area`, `dif_at_end`, `dea_at_end`, `ready_count` |
 
-Indices into `bi` are positions in the current retained list; they shift when retention drops old strokes and are not stable identifiers. No buy/sell stage is evaluated.
+Indices into `strokes` are positions in the current retained list; they shift when retention drops old strokes and are not stable identifiers. No buy/sell stage is evaluated.

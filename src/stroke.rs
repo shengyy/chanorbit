@@ -35,11 +35,11 @@ pub struct Stroke {
 }
 
 impl Stroke {
-    pub fn sdt(&self) -> NaiveDateTime {
+    pub fn start_at(&self) -> NaiveDateTime {
         self.start_fractal.dt
     }
 
-    pub fn edt(&self) -> NaiveDateTime {
+    pub fn end_at(&self) -> NaiveDateTime {
         self.end_fractal.dt
     }
 

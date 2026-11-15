@@ -9,8 +9,8 @@ pub struct Centre {
     /// Member range `start..end` in the stroke slice the sequence was built from.
     pub start: usize,
     pub end: usize,
-    pub sdt: NaiveDateTime,
-    pub edt: NaiveDateTime,
+    pub start_at: NaiveDateTime,
+    pub end_at: NaiveDateTime,
     pub core_high: f64,
     pub core_low: f64,
     pub core_mid: f64,
@@ -37,8 +37,8 @@ impl Centre {
         Self {
             start,
             end,
-            sdt: first.sdt(),
-            edt: last.edt(),
+            start_at: first.start_at(),
+            end_at: last.end_at(),
             core_high,
             core_low,
             core_mid: core_low + (core_high - core_low) * 0.5,

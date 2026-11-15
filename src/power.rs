@@ -1,4 +1,4 @@
-//! Raw-interval power over `(sdt, edt]` and the retained MACD view.
+//! Raw-interval power over `(start_at, end_at]` and the retained MACD view.
 use crate::analyzer::Analyzer;
 use crate::macd::{LOOKBACK, MacdSeries};
 use crate::stroke::Stroke;
@@ -24,7 +24,7 @@ pub struct PowerMacd {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Power {
-    /// Retained raw bars with `sdt < dt <= edt`.
+    /// Retained raw bars with `start_at < dt <= end_at`.
     pub sample_count: usize,
     pub mean_volume: Option<f64>,
     pub macd: PowerMacd,
@@ -123,7 +123,7 @@ pub fn interval_power(
     }
 }
 
-/// Stroke power; a raw bar the stroke snapshot holds inside `(sdt, edt]` that
+/// Stroke power; a raw bar the stroke snapshot holds inside `(start_at, end_at]` that
 /// is no longer retained makes areas and the mean volume unavailable.
 pub fn stroke_power(c: &Analyzer, s: &MacdSeries, stroke: &Stroke) -> Power {
     let mut power = interval_power(c, s, stroke.start_fractal.dt, stroke.end_fractal.dt);
@@ -157,8 +157,8 @@ pub struct MacdBar {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct MacdSegment {
     pub sign: i8,
-    pub sdt: NaiveDateTime,
-    pub edt: NaiveDateTime,
+    pub start_at: NaiveDateTime,
+    pub end_at: NaiveDateTime,
     pub bars: usize,
     /// Signed value with the largest magnitude; the first one wins ties.
     pub peak: f64,
@@ -190,7 +190,7 @@ pub fn macd_segments(bars: &[MacdBar]) -> Vec<MacdSegment> {
         let joins = open && out.last().is_some_and(|s| sign == 0 || sign == s.sign);
         if joins {
             let s = out.last_mut().unwrap();
-            s.edt = b.dt;
+            s.end_at = b.dt;
             s.bars += 1;
             if h.abs() > s.peak.abs() {
                 s.peak = h;
@@ -199,8 +199,8 @@ pub fn macd_segments(bars: &[MacdBar]) -> Vec<MacdSegment> {
         } else if sign != 0 {
             out.push(MacdSegment {
                 sign,
-                sdt: b.dt,
-                edt: b.dt,
+                start_at: b.dt,
+                end_at: b.dt,
                 bars: 1,
                 peak: h,
                 peak_at: b.dt,
