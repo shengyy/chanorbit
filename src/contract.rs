@@ -1,10 +1,12 @@
-//! JSON request/response contract of `chanorbit geometry` and `chanorbit
-//! stages`. Pure functions: text in, text out; the binary owns stdin/stdout.
+//! JSON request/response contract of `chanorbit geometry`, `stages` and
+//! `levels`. Pure functions: text in, text out; the binary owns stdin/stdout.
 use crate::analyzer::{Analyzer, Config};
 use crate::bar::RawBar;
 use crate::geometry::{Geometry, geometry};
+use crate::levels_child::{LevelOut, levels};
 use crate::observe::{StageFact, observed_stages};
 use chrono::NaiveDateTime;
+use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -12,11 +14,14 @@ use serde_json::Value;
 pub const SCHEMA: &str = "chanorbit.geometry/1";
 /// Output contract version of `stages`.
 pub const STAGES_SCHEMA: &str = "chanorbit.stages/1";
+/// Output contract version of `levels`.
+pub const LEVELS_SCHEMA: &str = "chanorbit.levels/1";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Command {
     Geometry,
     Stages,
+    Levels,
 }
 
 impl Command {
@@ -24,6 +29,7 @@ impl Command {
         match self {
             Command::Geometry => SCHEMA,
             Command::Stages => STAGES_SCHEMA,
+            Command::Levels => LEVELS_SCHEMA,
         }
     }
 }
@@ -45,6 +51,26 @@ pub struct Request {
     pub observe_from: Option<String>,
 }
 
+/// One instrument, several period series, coarsest first.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LevelsRequest {
+    #[serde(default)]
+    pub id: Value,
+    pub levels: Vec<LevelInput>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LevelInput {
+    pub name: String,
+    pub dt: Vec<String>,
+    pub high: Vec<f64>,
+    pub low: Vec<f64>,
+    pub close: Vec<f64>,
+    pub vol: Vec<f64>,
+}
+
 fn present_string<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<String>, D::Error> {
     String::deserialize(d).map(Some)
 }
@@ -62,6 +88,13 @@ pub struct StagesResponse {
     pub schema: String,
     pub id: Value,
     pub stages: Vec<StageFact>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct LevelsResponse {
+    pub schema: String,
+    pub id: Value,
+    pub levels: Vec<LevelOut>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -248,6 +281,47 @@ pub fn run_stages(req: Request) -> Result<StagesResponse, ErrorResponse> {
     })
 }
 
+/// Run one parsed `levels` request with the default stroke parameters.
+pub fn run_levels(req: LevelsRequest) -> Result<LevelsResponse, ErrorResponse> {
+    let fail = |kind, message| error(Command::Levels, req.id.clone(), kind, message);
+    if req.levels.is_empty() {
+        return Err(fail("invalid_request", "levels is empty".into()));
+    }
+    let mut inputs: Vec<(String, Vec<RawBar>)> = Vec::with_capacity(req.levels.len());
+    for (i, level) in req.levels.into_iter().enumerate() {
+        if level.name.is_empty() {
+            return Err(fail(
+                "invalid_request",
+                format!("levels[{i}].name is empty"),
+            ));
+        }
+        if let Some(j) = inputs.iter().position(|(n, _)| *n == level.name) {
+            return Err(fail(
+                "invalid_request",
+                format!("levels[{i}].name repeats levels[{j}].name: {}", level.name),
+            ));
+        }
+        let series = Request {
+            id: Value::Null,
+            dt: level.dt,
+            high: level.high,
+            low: level.low,
+            close: level.close,
+            vol: level.vol,
+            observe_from: None,
+        };
+        let bars = series
+            .bars()
+            .map_err(|(kind, message)| fail(kind, format!("levels[{i}].{message}")))?;
+        inputs.push((level.name, bars));
+    }
+    Ok(LevelsResponse {
+        schema: LEVELS_SCHEMA.into(),
+        id: req.id,
+        levels: levels(&inputs),
+    })
+}
+
 fn first_byte_is_brace(text: &str) -> bool {
     text.trim_start_matches([' ', '\t', '\n', '\r'])
         .starts_with('{')
@@ -269,50 +343,63 @@ pub fn handle(text: &str) -> (String, bool) {
     handle_command(Command::Geometry, text)
 }
 
-/// One request text for `command` in, one compact JSON line out.
-pub fn handle_command(command: Command, text: &str) -> (String, bool) {
-    let req = if !first_byte_is_brace(text) {
+/// Parse one request object for `command`.
+fn parse<T: DeserializeOwned>(command: Command, text: &str) -> Result<T, ErrorResponse> {
+    if !first_byte_is_brace(text) {
         let kind = if serde_json::from_str::<Value>(text).is_ok() {
             "invalid_input"
         } else {
             "invalid_json"
         };
-        Err(error(
+        return Err(error(
             command,
             Value::Null,
             kind,
             "a request must be one JSON object",
-        ))
-    } else {
-        match serde_json::from_str::<Request>(text) {
-            Ok(req) => Ok(req),
-            Err(e) => {
-                // Keep the caller's id when the outer object is readable.
-                let id = serde_json::from_str::<Value>(text)
-                    .ok()
-                    .and_then(|v| v.get("id").cloned())
-                    .unwrap_or(Value::Null);
-                let kind = if e.is_syntax() || e.is_eof() {
-                    "invalid_json"
-                } else {
-                    "invalid_request"
-                };
-                Err(error(command, id, kind, e.to_string()))
-            }
-        }
-    };
-    match (command, req) {
-        (_, Err(e)) => encode::<Response>(Err(e)),
-        (Command::Geometry, Ok(req)) => contained(command, req.id.clone(), || {
-            #[cfg(test)]
-            tests::panic_on_probe(&req);
-            run(req)
-        }),
-        (Command::Stages, Ok(req)) => contained(command, req.id.clone(), || {
-            #[cfg(test)]
-            tests::panic_on_probe(&req);
-            run_stages(req)
-        }),
+        ));
+    }
+    serde_json::from_str::<T>(text).map_err(|e| {
+        // Keep the caller's id when the outer object is readable.
+        let id = serde_json::from_str::<Value>(text)
+            .ok()
+            .and_then(|v| v.get("id").cloned())
+            .unwrap_or(Value::Null);
+        let kind = if e.is_syntax() || e.is_eof() {
+            "invalid_json"
+        } else {
+            "invalid_request"
+        };
+        error(command, id, kind, e.to_string())
+    })
+}
+
+/// One request text for `command` in, one compact JSON line out.
+pub fn handle_command(command: Command, text: &str) -> (String, bool) {
+    match command {
+        Command::Geometry => match parse::<Request>(command, text) {
+            Err(e) => encode::<Response>(Err(e)),
+            Ok(req) => contained(command, req.id.clone(), || {
+                #[cfg(test)]
+                tests::panic_on_probe(&req.id);
+                run(req)
+            }),
+        },
+        Command::Stages => match parse::<Request>(command, text) {
+            Err(e) => encode::<Response>(Err(e)),
+            Ok(req) => contained(command, req.id.clone(), || {
+                #[cfg(test)]
+                tests::panic_on_probe(&req.id);
+                run_stages(req)
+            }),
+        },
+        Command::Levels => match parse::<LevelsRequest>(command, text) {
+            Err(e) => encode::<Response>(Err(e)),
+            Ok(req) => contained(command, req.id.clone(), || {
+                #[cfg(test)]
+                tests::panic_on_probe(&req.id);
+                run_levels(req)
+            }),
+        },
     }
 }
 
@@ -380,8 +467,8 @@ mod tests {
     const PROBE: &str = "panic-probe";
 
     /// Test builds only: a request with this id panics inside its computation.
-    pub(super) fn panic_on_probe(req: &Request) {
-        if req.id == PROBE {
+    pub(super) fn panic_on_probe(id: &Value) {
+        if *id == PROBE {
             panic!("probe panic for {PROBE}");
         }
     }

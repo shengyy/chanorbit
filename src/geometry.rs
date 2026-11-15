@@ -94,7 +94,8 @@ pub struct Geometry {
     pub macd: MacdFacts,
 }
 
-fn relation(al: f64, ah: f64, bl: f64, bh: f64) -> String {
+/// Interval `[bl, bh]` (the later one) against `[al, ah]`.
+pub(crate) fn relation(al: f64, ah: f64, bl: f64, bh: f64) -> String {
     if bl > ah {
         "above"
     } else if bh < al {
