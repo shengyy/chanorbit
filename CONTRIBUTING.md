@@ -1,6 +1,6 @@
 # Contributing
 
-Use the stable Rust toolchain pinned by `rust-toolchain.toml`. `Cargo.lock` owns dependency versions.
+Use the stable Rust toolchain pinned by `rust-toolchain.toml` (minimal profile, so building the binary needs nothing else). The gates below also need `rustup component add clippy rustfmt`. `Cargo.lock` owns dependency versions.
 
 ## Local gates
 

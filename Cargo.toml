@@ -20,5 +20,7 @@ serde_json = { version = "1.0.149", features = ["float_roundtrip"] }
 flate2 = "1.1"
 
 [profile.release]
+# A panic inside one request becomes that request's internal_error; this needs unwinding.
+panic = "unwind"
 lto = true
 codegen-units = 1

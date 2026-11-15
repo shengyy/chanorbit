@@ -33,14 +33,14 @@ Exactly one JSON object; any other JSON value (for example a positional array) i
 |---|---|---|
 | `id` | any JSON, default `null` | Echoed in the response |
 | `dt` | string array | Exactly `YYYY-MM-DDTHH:MM:SS`: exchange-local wall clock, zero-padded, no fraction, no zone, no surrounding spaces, a real calendar time (no `:60`) |
-| `high`, `low`, `close` | number arrays | Finite prices in `(0, 1e9]`, in the caller's units |
+| `high`, `low`, `close` | number arrays | Finite prices in `(0, 1e9]`, in the caller's units, with `low ≤ high` and `low ≤ close ≤ high` in every bar (equality allowed) |
 | `vol` | number array | Finite volume in `[0, 1e15]`, in the caller's units; checked by `stages` too, though no stage fact uses it |
 | `observe_from` | string, `stages` only, optional | `YYYY-MM-DDTHH:MM:SS`; observation starts at the first input at or after it ([structure contract](structure-contract.md#observation)). Malformed or `null`: `invalid_request`; present in a `geometry` request, `null` included: `invalid_request` |
 
 - Length: 1 to 200,000 bars per request; more is an `invalid_input` error.
 - Unknown fields are rejected; a repeated key is an `invalid_request` error.
 - `dt` must be non-decreasing: adjacent equal times are revisions (the later bar replaces the earlier), and any time earlier than its predecessor — including a repeat that is not adjacent — is an `invalid_bar` error. Deduplication and corrections are the caller's.
-- Values are checked before any computation; a bar outside these ranges fails the request with `invalid_bar` naming the field and index. The engine's `non_finite` reasons therefore cannot arise through the command line.
+- Values are checked before any computation; a bar outside these ranges, with `high < low`, or with `close` outside `[low, high]` fails the request with `invalid_bar` naming the field and index. The engine's `non_finite` reasons therefore cannot arise through the command line.
 - Stroke parameters are the defaults of the [structure contract](structure-contract.md#strokes).
 
 Columns rather than per-bar objects: the caller already holds its series as columns and passes them without building one object per bar, the request carries each key once, and parsing fills arrays directly. One shape only is accepted.
@@ -64,7 +64,8 @@ Error response, one line, carrying the command's schema:
 | `invalid_json` | Not UTF-8, or not parseable JSON |
 | `invalid_input` | Valid JSON that is not an object; more than 200,000 bars |
 | `invalid_request` | Object shape: missing or unknown field, repeated key, wrong type, empty `dt`, column lengths differ, `observe_from` malformed or sent to `geometry` |
-| `invalid_bar` | One bar: `dt` not in the format or earlier than the previous one, a price or volume out of range |
+| `invalid_bar` | One bar: `dt` not in the format or earlier than the previous one, a price or volume out of range, `high < low`, `close` outside `[low, high]` |
+| `internal_error` | The computation of this request panicked (an engine defect); `message` carries the panic message. Other requests in the batch are unaffected and keep their order |
 
 `id` is echoed when the outer object was readable, otherwise `null`. `message` is for humans and not a contract.
 
@@ -75,9 +76,9 @@ Error response, one line, carrying the command's schema:
 | 0 | Every response written and successful (including an empty batch) |
 | 1 | Every response written; at least one is an error object |
 | 2 | Bad command line; stdout is empty |
-| 3 | stdin could not be read or stdout could not be written |
+| 3 | stdin could not be read or stdout could not be written, including a reader that closed the pipe (also for `--version` and `--help`); no panic, and a closed stderr is ignored |
 
-stdout carries only contract JSON, one object per line. stderr carries human-readable diagnostics for codes 2 and 3, is empty for 0 and 1, and is not a contract.
+stdout carries only contract JSON, one object per line. stderr carries human-readable diagnostics for codes 2 and 3 and the panic report behind an `internal_error`; it is otherwise empty for 0 and 1, never receives contract JSON, and is not a contract.
 
 ## Versioning
 

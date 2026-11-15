@@ -21,19 +21,26 @@ struct Args {
     jobs: Option<usize>,
 }
 
-fn parse_args(args: &[String]) -> Result<Option<Args>, String> {
+/// What the command line asks for.
+enum Parsed {
+    Run(Args),
+    /// `--version` or `--help`: print this line on stdout.
+    Print(String),
+}
+
+/// Write one diagnostic line to stderr. A closed stderr is ignored: the exit
+/// code still tells the caller what happened.
+fn report(message: &str) {
+    let _ = writeln!(std::io::stderr(), "chanorbit: {message}");
+}
+
+fn parse_args(args: &[String]) -> Result<Parsed, String> {
     match args.first().map(String::as_str) {
-        Some("--version" | "-V") if args.len() == 1 => {
-            println!(
-                "chanorbit {} schemas {SCHEMA} {STAGES_SCHEMA}",
-                env!("CARGO_PKG_VERSION")
-            );
-            Ok(None)
-        }
-        Some("--help" | "-h") if args.len() == 1 => {
-            println!("{USAGE}");
-            Ok(None)
-        }
+        Some("--version" | "-V") if args.len() == 1 => Ok(Parsed::Print(format!(
+            "chanorbit {} schemas {SCHEMA} {STAGES_SCHEMA}",
+            env!("CARGO_PKG_VERSION")
+        ))),
+        Some("--help" | "-h") if args.len() == 1 => Ok(Parsed::Print(USAGE.into())),
         Some(name @ ("geometry" | "stages")) => {
             let mut parsed = Args {
                 command: if name == "stages" {
@@ -61,7 +68,7 @@ fn parse_args(args: &[String]) -> Result<Option<Args>, String> {
             if parsed.jobs.is_some() && !parsed.batch {
                 return Err("--jobs needs --batch".into());
             }
-            Ok(Some(parsed))
+            Ok(Parsed::Run(parsed))
         }
         Some(other) => Err(format!("unknown command: {other}")),
         None => Err("missing command".into()),
@@ -134,10 +141,19 @@ fn run(args: Args) -> Result<bool, String> {
 fn main() -> ExitCode {
     let argv: Vec<String> = std::env::args().skip(1).collect();
     let args = match parse_args(&argv) {
-        Ok(Some(args)) => args,
-        Ok(None) => return ExitCode::from(EXIT_OK),
+        Ok(Parsed::Run(args)) => args,
+        Ok(Parsed::Print(line)) => {
+            let mut out = std::io::stdout().lock();
+            return match writeln!(out, "{line}").and_then(|()| out.flush()) {
+                Ok(()) => ExitCode::from(EXIT_OK),
+                Err(e) => {
+                    report(&format!("writing stdout: {e}"));
+                    ExitCode::from(EXIT_IO)
+                }
+            };
+        }
         Err(message) => {
-            eprintln!("chanorbit: {message}\n{USAGE}");
+            report(&format!("{message}\n{USAGE}"));
             return ExitCode::from(EXIT_USAGE);
         }
     };
@@ -145,7 +161,7 @@ fn main() -> ExitCode {
         Ok(true) => ExitCode::from(EXIT_OK),
         Ok(false) => ExitCode::from(EXIT_REQUEST_ERROR),
         Err(message) => {
-            eprintln!("chanorbit: {message}");
+            report(&message);
             ExitCode::from(EXIT_IO)
         }
     }

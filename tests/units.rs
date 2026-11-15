@@ -1,7 +1,7 @@
 //! Small definitional checks that do not need a baseline.
 mod common;
 
-use chanorbit::contract::{handle, parse_dt};
+use chanorbit::contract::{Command, handle, handle_command, parse_dt};
 use chanorbit::power::{MacdBar, macd_segments};
 use chanorbit::{Analyzer, RawBar, geometry};
 use serde_json::{Value, json};
@@ -231,6 +231,41 @@ fn prices_and_volumes_must_be_in_range() {
         assert!(!good, "{field}={value}");
         assert_eq!(error_kind(&text).as_deref(), Some("invalid_bar"), "{text}");
         assert!(text.contains(&format!("{field}[0]")), "{text}");
+    }
+}
+
+#[test]
+fn bars_must_hold_low_close_high_order() {
+    let base = r#"{"dt":["2026-01-05T15:00:00","2026-01-06T15:00:00"],"high":[10,10],"low":[9,9],"close":[9.5,9.5],"vol":[100,100]}"#;
+    // Equal ends are allowed: a one-price bar, a close at the low, a close at the high.
+    for (high, low, close) in [(10.0, 10.0, 10.0), (10.0, 9.0, 9.0), (10.0, 9.0, 10.0)] {
+        let mut v: Value = serde_json::from_str(base).unwrap();
+        (v["high"][1], v["low"][1], v["close"][1]) = (json!(high), json!(low), json!(close));
+        assert!(handle(&v.to_string()).1, "{high} {low} {close}");
+    }
+    for (high, low, close, named) in [
+        (9.0, 9.5, 9.2, "high[1]: 9 below low[1] 9.5"),
+        (
+            10.0,
+            9.0,
+            8.99,
+            "close[1]: 8.99 outside [low[1], high[1]] = [9, 10]",
+        ),
+        (
+            10.0,
+            9.0,
+            10.01,
+            "close[1]: 10.01 outside [low[1], high[1]] = [9, 10]",
+        ),
+    ] {
+        let mut v: Value = serde_json::from_str(base).unwrap();
+        (v["high"][1], v["low"][1], v["close"][1]) = (json!(high), json!(low), json!(close));
+        for command in [Command::Geometry, Command::Stages] {
+            let (text, ok) = handle_command(command, &v.to_string());
+            assert!(!ok);
+            assert_eq!(error_kind(&text).as_deref(), Some("invalid_bar"), "{text}");
+            assert!(text.contains(named), "{text}");
+        }
     }
 }
 

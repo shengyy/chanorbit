@@ -258,3 +258,47 @@ fn observe_from_is_refused_by_geometry_even_as_null() {
     let v: Value = serde_json::from_slice(&out.stdout).unwrap();
     assert_eq!(v["error"]["kind"], "invalid_request");
 }
+
+/// The reader of stdout (and maybe stderr) went away: exit 3, no panic.
+#[test]
+fn a_closed_stdout_exits_with_the_io_code() {
+    let request = r#"{"id":"p","dt":["2020-01-02T15:00:00"],"high":[2.0],"low":[1.0],"close":[1.5],"vol":[1.0]}"#;
+    let input = format!("{request}\n{request}\n");
+    for args in [
+        &["geometry"][..],
+        &["geometry", "--batch"],
+        &["stages", "--batch", "--jobs", "2"],
+        &["--version"],
+        &["--help"],
+    ] {
+        for close_stderr in [false, true] {
+            let mut child = Command::new(env!("CARGO_BIN_EXE_chanorbit"))
+                .args(args)
+                .stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .spawn()
+                .unwrap();
+            drop(child.stdout.take());
+            if close_stderr {
+                drop(child.stderr.take());
+            }
+            // The process may exit before reading stdin; a failed write here is fine.
+            let _ = child.stdin.take().unwrap().write_all(input.as_bytes());
+            let out = child.wait_with_output().unwrap();
+            assert_eq!(
+                out.status.code(),
+                Some(3),
+                "{args:?} close_stderr={close_stderr}"
+            );
+            let stderr = String::from_utf8_lossy(&out.stderr);
+            assert!(!stderr.contains("panicked"), "{args:?}: {stderr}");
+            if !close_stderr {
+                assert!(
+                    stderr.starts_with("chanorbit: writing stdout:"),
+                    "{args:?}: {stderr}"
+                );
+            }
+        }
+    }
+}

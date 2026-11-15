@@ -163,6 +163,21 @@ impl Request {
                         ));
                     }
                 }
+                let (high, low, close) = (self.high[i], self.low[i], self.close[i]);
+                if high < low {
+                    return Err((
+                        "invalid_bar",
+                        format!("high[{i}]: {high} below low[{i}] {low}"),
+                    ));
+                }
+                if !(low..=high).contains(&close) {
+                    return Err((
+                        "invalid_bar",
+                        format!(
+                            "close[{i}]: {close} outside [low[{i}], high[{i}]] = [{low}, {high}]"
+                        ),
+                    ));
+                }
                 if !(self.vol[i] >= 0.0 && self.vol[i] <= MAX_VOLUME) {
                     return Err((
                         "invalid_bar",
@@ -288,14 +303,61 @@ pub fn handle_command(command: Command, text: &str) -> (String, bool) {
     };
     match (command, req) {
         (_, Err(e)) => encode::<Response>(Err(e)),
-        (Command::Geometry, Ok(req)) => encode(run(req)),
-        (Command::Stages, Ok(req)) => encode(run_stages(req)),
+        (Command::Geometry, Ok(req)) => contained(command, req.id.clone(), || {
+            #[cfg(test)]
+            tests::panic_on_probe(&req);
+            run(req)
+        }),
+        (Command::Stages, Ok(req)) => contained(command, req.id.clone(), || {
+            #[cfg(test)]
+            tests::panic_on_probe(&req);
+            run_stages(req)
+        }),
     }
 }
 
+/// Run one request's computation; a panic inside it becomes that request's
+/// `internal_error` instead of ending the process.
+fn contained<T: Serialize>(
+    command: Command,
+    id: Value,
+    compute: impl FnOnce() -> Result<T, ErrorResponse>,
+) -> (String, bool) {
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(compute)) {
+        Ok(result) => encode(result),
+        Err(payload) => encode::<Response>(Err(error(
+            command,
+            id,
+            "internal_error",
+            panic_message(payload.as_ref()),
+        ))),
+    }
+}
+
+fn panic_message(payload: &(dyn std::any::Any + Send)) -> String {
+    let text = payload
+        .downcast_ref::<&str>()
+        .copied()
+        .or_else(|| payload.downcast_ref::<String>().map(String::as_str))
+        .unwrap_or("non-text panic payload");
+    format!("panic while computing the request: {text}")
+}
+
 /// [`handle_command`] for raw bytes; text that is not UTF-8 is an
-/// `invalid_json` error.
+/// `invalid_json` error. A panic outside the computation (where the id is
+/// not known) is an `internal_error` with a `null` id.
 pub fn handle_bytes(command: Command, bytes: &[u8]) -> (String, bool) {
+    std::panic::catch_unwind(|| handle_bytes_unguarded(command, bytes)).unwrap_or_else(|payload| {
+        encode::<Response>(Err(error(
+            command,
+            Value::Null,
+            "internal_error",
+            panic_message(payload.as_ref()),
+        )))
+    })
+}
+
+fn handle_bytes_unguarded(command: Command, bytes: &[u8]) -> (String, bool) {
     match std::str::from_utf8(bytes) {
         Ok(text) => handle_command(command, text),
         Err(e) => (
@@ -308,5 +370,71 @@ pub fn handle_bytes(command: Command, bytes: &[u8]) -> (String, bool) {
             .expect("error serializes"),
             false,
         ),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const PROBE: &str = "panic-probe";
+
+    /// Test builds only: a request with this id panics inside its computation.
+    pub(super) fn panic_on_probe(req: &Request) {
+        if req.id == PROBE {
+            panic!("probe panic for {PROBE}");
+        }
+    }
+
+    fn request(id: &str) -> String {
+        format!(
+            r#"{{"id":"{id}","dt":["2020-01-02T15:00:00","2020-01-03T15:00:00"],"high":[2.0,2.1],"low":[1.0,1.1],"close":[1.5,1.6],"vol":[1.0,1.0]}}"#
+        )
+    }
+
+    #[test]
+    fn a_panic_in_one_request_is_its_internal_error() {
+        for command in [Command::Geometry, Command::Stages] {
+            let lines = [request("a"), request(PROBE), request("b")];
+            let out: Vec<(Value, bool)> = lines
+                .iter()
+                .map(|l| {
+                    let (text, ok) = handle_bytes(command, l.as_bytes());
+                    (serde_json::from_str(&text).unwrap(), ok)
+                })
+                .collect();
+            assert!(out[0].1 && out[2].1);
+            assert_eq!(
+                (&out[0].0["id"], &out[2].0["id"]),
+                (&"a".into(), &"b".into())
+            );
+            let (e, ok) = &out[1];
+            assert!(!ok);
+            assert_eq!(e["schema"], command.schema());
+            assert_eq!(e["id"], PROBE);
+            assert_eq!(e["error"]["kind"], "internal_error");
+            assert_eq!(
+                e["error"]["message"],
+                format!("panic while computing the request: probe panic for {PROBE}")
+            );
+            // The neighbours answer exactly as on their own.
+            assert_eq!(
+                out[0].0,
+                serde_json::from_str::<Value>(&handle_command(command, &lines[0]).0).unwrap()
+            );
+        }
+    }
+
+    #[test]
+    fn a_non_text_panic_payload_is_named() {
+        let (text, ok) = contained::<Response>(Command::Geometry, Value::Null, || {
+            std::panic::panic_any(7_u8)
+        });
+        assert!(!ok);
+        let v: Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(
+            v["error"]["message"],
+            "panic while computing the request: non-text panic payload"
+        );
     }
 }
