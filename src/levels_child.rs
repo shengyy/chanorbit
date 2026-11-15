@@ -30,6 +30,8 @@ pub struct Point {
 pub struct Points {
     pub last_stroke: Option<Point>,
     pub unfinished: Option<Point>,
+    /// The current extreme of an extending last stroke.
+    pub extension: Option<Point>,
     pub after_extreme: Option<Point>,
 }
 
@@ -37,13 +39,20 @@ pub struct Points {
 pub struct Forces {
     pub last_stroke: Vec<Comparison>,
     pub unfinished: Vec<Comparison>,
+    /// As in `zones`: the child series starts after this boundary, so
+    /// `last_stroke` compares the child strokes available.
+    pub child_starts_after: Option<&'static str>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct Boundaries {
-    pub last_start: NaiveDateTime,
-    pub last_end: NaiveDateTime,
+    /// `null` when the child series starts after it.
+    pub last_start: Option<NaiveDateTime>,
+    pub last_end: Option<NaiveDateTime>,
     pub unfinished_extreme: Option<NaiveDateTime>,
+    /// Whether the parent has an unfinished reverse segment.
+    #[serde(skip)]
+    pub has_unfinished: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -59,6 +68,10 @@ pub struct Placed {
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct Zones {
     pub boundaries: Boundaries,
+    /// `last_start` (the child series starts inside the parent's last
+    /// stroke) or `last_end` (after it); `null` when every boundary has a
+    /// child time.
+    pub child_starts_after: Option<&'static str>,
     pub objects: Vec<Placed>,
 }
 
@@ -83,8 +96,16 @@ pub struct LevelOut {
     pub last_stroke_member: Option<Membership>,
     pub centres: Vec<LevelCentre>,
     pub comparisons: Comparisons,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    /// Every level but the finest: `child` and `child_reason`.
+    #[serde(flatten)]
+    pub child: Option<ChildSlot>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct ChildSlot {
+    /// `null` when this level has no strokes.
     pub child: Option<Child>,
+    pub child_reason: Option<&'static str>,
 }
 
 /// The finer bar inside the coarser bar at `at` (period `(previous dt, at]`)
@@ -164,9 +185,9 @@ const ZONES: [&str; 6] = [
 
 /// The zone of span `[a, b]` with `b > b1`: the first rule that applies.
 fn zone_of(a: NaiveDateTime, b: NaiveDateTime, z: &Boundaries) -> &'static str {
-    let (b1, b2) = (z.last_start, z.last_end);
+    let (b1, b2) = (z.b1(), z.b2());
     let crosses = |x: NaiveDateTime| a < x && x < b;
-    let rules: [(bool, &'static str); 6] = match z.unfinished_extreme {
+    let rules: [(bool, &'static str); 6] = match z.b3() {
         Some(b3) => [
             (crosses(b1), ZONES[0]),
             (b1 <= a && b <= b2, ZONES[1]),
@@ -206,30 +227,83 @@ fn zone_of(a: NaiveDateTime, b: NaiveDateTime, z: &Boundaries) -> &'static str {
 
 fn crossed(a: NaiveDateTime, b: NaiveDateTime, z: &Boundaries) -> Vec<&'static str> {
     [
-        (Some(z.last_start), "last_start"),
-        (Some(z.last_end), "last_end"),
-        (z.unfinished_extreme, "unfinished_extreme"),
+        (z.last_start, "last_start"),
+        (z.last_end, "last_end"),
+        (
+            z.b3().filter(|_| z.unfinished_extreme.is_some()),
+            "unfinished_extreme",
+        ),
     ]
     .into_iter()
     .filter_map(|(x, name)| x.filter(|x| a < *x && *x < b).map(|_| name))
     .collect()
 }
 
+impl Boundaries {
+    /// A boundary before the child series lies before every child object.
+    fn b1(&self) -> NaiveDateTime {
+        self.last_start.unwrap_or(NaiveDateTime::MIN)
+    }
+
+    fn b2(&self) -> NaiveDateTime {
+        self.last_end.unwrap_or(NaiveDateTime::MIN)
+    }
+
+    fn b3(&self) -> Option<NaiveDateTime> {
+        self.has_unfinished
+            .then(|| self.unfinished_extreme.unwrap_or(NaiveDateTime::MIN))
+    }
+
+    /// The latest boundary the child series starts after.
+    fn child_starts_after(&self) -> Option<&'static str> {
+        if self.has_unfinished && self.unfinished_extreme.is_none() {
+            Some("unfinished_extreme")
+        } else if self.last_end.is_none() {
+            Some("last_end")
+        } else if self.last_start.is_none() {
+            Some("last_start")
+        } else {
+            None
+        }
+    }
+}
+
 fn boundaries(parent: &Level, child: &Level) -> Result<Boundaries, &'static str> {
-    let Some(last) = parent.strokes.last() else {
-        return Err("no_parent_stroke");
+    let last = parent
+        .strokes
+        .last()
+        .expect("a child is placed only in a parent with strokes");
+    let first = child.input.first().map(|b| b.dt);
+    let last_child = child.input.last().map(|b| b.dt);
+    // `Ok(None)`: the parent bar ends before the child series starts.
+    let time = |at: NaiveDateTime, high, reason| {
+        if first.is_some_and(|f| at < f) {
+            return Ok(None);
+        }
+        child_time(&parent.input, &child.input, at, high)
+            .map(|f| Some(f.0))
+            .ok_or(if last_child.is_some_and(|l| l < at) {
+                "child_ends_before"
+            } else {
+                reason
+            })
     };
-    let time = |at, high| child_time(&parent.input, &child.input, at, high).map(|f| f.0);
-    let last_start = time(last.start_at, !up(last.direction)).ok_or("last_start_no_child_bar")?;
-    let last_end = time(last.end_at, up(last.direction)).ok_or("last_end_no_child_bar")?;
-    let unfinished_extreme = match parent.reverse_seg() {
-        Some(u) => Some(time(u.end_at, up(u.direction)).ok_or("unfinished_extreme_no_child_bar")?),
+    let last_start = time(
+        last.start_at,
+        !up(last.direction),
+        "last_start_no_child_bar",
+    )?;
+    let last_end = time(last.end_at, up(last.direction), "last_end_no_child_bar")?;
+    let unfinished = parent.reverse_seg();
+    let unfinished_extreme = match unfinished {
+        Some(u) => time(u.end_at, up(u.direction), "unfinished_extreme_no_child_bar")?,
         None => None,
     };
     Ok(Boundaries {
         last_start,
         last_end,
         unfinished_extreme,
+        has_unfinished: unfinished.is_some(),
     })
 }
 
@@ -263,7 +337,7 @@ fn zones(child: &Level, z: &Boundaries) -> Vec<Placed> {
     }
     spans
         .into_iter()
-        .filter(|s| s.3 > z.last_start)
+        .filter(|s| s.3 > z.b1())
         .map(|(kind, index, a, b)| Placed {
             kind,
             index,
@@ -286,9 +360,9 @@ fn forces(child: &Level, placed: &[Placed], zone: &str, d: Direction) -> Vec<Com
         .filter(|s| s.direction == d)
         .collect();
     let mut rows = Vec::new();
-    if let [first, .., previous, last] = inside.as_slice() {
+    if let [first, .., last] = inside.as_slice() {
         rows.push(child.compare("last_vs_first", last, first));
-        if inside.len() >= 3 {
+        if let [_, .., previous, _] = inside.as_slice() {
             rows.push(child.compare("last_vs_previous", last, previous));
         }
     }
@@ -307,6 +381,13 @@ fn child_of(parent: &Level, child: &Level, name: &str) -> Child {
             let x = parent.unfinished.as_ref()?.raw_extreme?;
             Some(point(parent, child, &segs, u.direction, x.at, x.price))
         }),
+        extension: parent
+            .unfinished_seg()
+            .filter(|u| u.pos == Pos::Extension)
+            .and_then(|u| {
+                let x = parent.unfinished.as_ref()?.raw_extreme?;
+                Some(point(parent, child, &segs, u.direction, x.at, x.price))
+            }),
         after_extreme: parent.after_extreme.as_ref().map(|p| {
             let x = p.raw_extreme;
             point(parent, child, &segs, p.direction, x.at, x.price)
@@ -317,6 +398,7 @@ fn child_of(parent: &Level, child: &Level, name: &str) -> Child {
         Ok(b) => {
             let objects = zones(child, &b);
             let forces = Forces {
+                child_starts_after: b.child_starts_after(),
                 last_stroke: last.map_or_else(Vec::new, |s| {
                     forces(child, &objects, "inside_last", s.direction)
                 }),
@@ -326,6 +408,7 @@ fn child_of(parent: &Level, child: &Level, name: &str) -> Child {
             };
             (
                 Some(Zones {
+                    child_starts_after: b.child_starts_after(),
                     boundaries: b,
                     objects,
                 }),
@@ -343,8 +426,12 @@ fn child_of(parent: &Level, child: &Level, name: &str) -> Child {
     }
 }
 
-fn output(level: &Level, name: &str, child: Option<Child>) -> LevelOut {
+fn output(level: &Level, name: &str, child: Option<Option<Child>>) -> LevelOut {
     let ready = !level.strokes.is_empty();
+    let child = child.map(|c| ChildSlot {
+        child_reason: c.is_none().then_some("missing_material"),
+        child: c,
+    });
     LevelOut {
         name: name.into(),
         status: if ready { "ready" } else { "missing_material" },
@@ -371,9 +458,10 @@ pub fn levels(inputs: &[(String, Vec<RawBar>)]) -> Vec<LevelOut> {
     }
     (0..built.len())
         .map(|i| {
-            let child = built
-                .get(i + 1)
-                .map(|c| child_of(&built[i], c, &inputs[i + 1].0));
+            let parent = &built[i];
+            let child = built.get(i + 1).map(|c| {
+                (!parent.strokes.is_empty()).then(|| child_of(parent, c, &inputs[i + 1].0))
+            });
             output(&built[i], &inputs[i].0, child)
         })
         .collect()
@@ -431,18 +519,44 @@ mod tests {
     }
 
     #[test]
+    fn a_child_series_starting_inside_the_last_stroke_is_still_zoned() {
+        let base = t("2026-01-05T09:00:00");
+        let at = |m: i64| base + chrono::Duration::minutes(m);
+        let z = Boundaries {
+            last_start: None,
+            last_end: Some(at(20)),
+            unfinished_extreme: Some(at(30)),
+            has_unfinished: true,
+        };
+        assert_eq!(z.child_starts_after(), Some("last_start"));
+        assert_eq!(zone_of(at(0), at(5), &z), "inside_last");
+        assert_eq!(zone_of(at(0), at(25), &z), "crosses_last_end");
+        assert_eq!(crossed(at(0), at(25), &z), ["last_end"]);
+        let after = Boundaries {
+            last_start: None,
+            last_end: None,
+            unfinished_extreme: None,
+            has_unfinished: true,
+        };
+        assert_eq!(after.child_starts_after(), Some("unfinished_extreme"));
+        assert_eq!(zone_of(at(0), at(5), &after), "after_extreme");
+        assert!(crossed(at(0), at(5), &after).is_empty());
+    }
+
+    #[test]
     fn every_span_after_the_last_start_lands_in_exactly_one_zone() {
         let base = t("2026-01-05T09:00:00");
         let at = |m: i64| base + chrono::Duration::minutes(m);
         for b3 in [None, Some(at(30))] {
             let z = Boundaries {
-                last_start: at(10),
-                last_end: at(20),
+                last_start: Some(at(10)),
+                last_end: Some(at(20)),
                 unfinished_extreme: b3,
+                has_unfinished: b3.is_some(),
             };
             for a in 0..45 {
                 for b in a + 1..46 {
-                    if at(b) <= z.last_start {
+                    if at(b) <= z.b1() {
                         continue;
                     }
                     let zone = zone_of(at(a), at(b), &z);

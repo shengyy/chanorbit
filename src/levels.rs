@@ -210,16 +210,35 @@ fn up(d: Direction) -> bool {
     d == Direction::Up
 }
 
+/// Raw extreme over `(start, end]`: the first bar holding it, except that
+/// the end bar wins a tie (an earlier bar only when strictly beyond it).
 pub fn raw_extreme(
     raw: &[RawBar],
     d: Direction,
     start: NaiveDateTime,
     end: NaiveDateTime,
 ) -> Option<Extreme> {
-    raw[rows(raw, start, end)]
+    extreme_of(&raw[rows(raw, start, end)], d, end)
+}
+
+/// Raw extreme over `[from, end]`, the same tie rule.
+fn raw_extreme_from(
+    raw: &[RawBar],
+    d: Direction,
+    from: NaiveDateTime,
+    end: NaiveDateTime,
+) -> Option<Extreme> {
+    let a = raw.partition_point(|b| b.dt < from);
+    let b = raw.partition_point(|b| b.dt <= end).max(a);
+    extreme_of(&raw[a..b], d, end)
+}
+
+fn extreme_of(bars: &[RawBar], d: Direction, end: NaiveDateTime) -> Option<Extreme> {
+    let price = |b: &RawBar| if up(d) { b.high } else { b.low };
+    let mut x = bars
         .iter()
         .map(|b| Extreme {
-            price: if up(d) { b.high } else { b.low },
+            price: price(b),
             at: b.dt,
         })
         .reduce(|a, b| {
@@ -229,7 +248,14 @@ pub fn raw_extreme(
                 b.price < a.price
             };
             if beyond { b } else { a }
-        })
+        })?;
+    if let Some(last) = bars.last()
+        && last.dt == end
+        && price(last) == x.price
+    {
+        x.at = last.dt;
+    }
+    Some(x)
 }
 
 fn dif_extreme(
@@ -577,6 +603,9 @@ impl Level {
         let after_third = |to: usize| segs[third + 1..to].iter().map(|s| s.pos).collect();
         // The path starts at the third member's end price, then its raw bars.
         let start_met = position(self.strokes[third].end_price, zd, zg) != end_side;
+        let above = end_side == "above";
+        // The exit is the bar after the last point off the end side (that
+        // point itself when it is the last bar).
         let star = match path.iter().rposition(|b| side(b, zd, zg) != end_side) {
             Some(i) => path.get(i + 1).or(path.get(i)),
             None if start_met => path.first(),
@@ -601,7 +630,11 @@ impl Level {
         };
         let j = containing(exit.dt);
         let x = segs[j];
-        let above = end_side == "above";
+        let exit_direction = if above {
+            Direction::Up
+        } else {
+            Direction::Down
+        };
         let retest = match x.pos {
             Pos::Stroke(_) => segs
                 .get(j + 1)
@@ -652,7 +685,12 @@ impl Level {
             departure: x.pos,
             direction: x.direction,
             edge: if above { "zg" } else { "zd" },
-            raw_extreme: raw_extreme(raw, x.direction, x.start_at, x.end_at),
+            // Against the exit side: the extreme on the exit side from the exit bar on.
+            raw_extreme: if x.direction == exit_direction {
+                raw_extreme(raw, x.direction, x.start_at, x.end_at)
+            } else {
+                raw_extreme_from(raw, exit_direction, exit.dt, x.end_at)
+            },
             member: matches!(x.pos, Pos::Stroke(p) if p + w0 < z.end),
             first_beyond_at: exit.dt,
             retest: retest.map(|r| r.pos),

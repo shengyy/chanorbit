@@ -20,7 +20,7 @@ chanorbit --help | -h
 
 `--jobs` is accepted only together with `--batch`; alone, or with a value that is not a positive integer, it is a command-line error (exit 2).
 
-In batch mode stdin is split into lines on `\n` (a trailing `\r` is removed); lines that are empty or only ASCII whitespace are skipped, so an empty batch writes nothing and exits 0. Responses keep input order whatever `--jobs` is, so output bytes are deterministic. Each line stands alone: a line that is not UTF-8, not JSON or not a valid request yields an error object on its own output line, and the other lines are answered normally.
+In batch mode stdin is split into lines on `\n` (a trailing `\r` is removed); lines that are empty or only ASCII whitespace are skipped, so an empty batch writes nothing and exits 0. Responses keep input order whatever `--jobs` is, so output bytes are deterministic. The whole of stdin and every response are held in memory until the batch is written, so memory grows with the batch: split large batches. Each line stands alone: a line that is not UTF-8, not JSON or not a valid request yields an error object on its own output line, and the other lines are answered normally.
 
 ## Request
 
@@ -127,11 +127,12 @@ Every `dt` labels the **end** of its bar's period, and a bar still forming carri
       },
       "child": {
         "name": "30m",
-        "points": {"last_stroke": {"at": "2026-11-06T15:00:00", "price": 11.3, "child_at": "2026-11-06T10:30:00", "child_price": 11.3, "passed_by": null}, "unfinished": {"at": "2026-11-13T15:00:00", "price": 11.65, "child_at": "2026-11-13T14:00:00", "child_price": 11.65, "passed_by": null}, "after_extreme": {"at": "2026-11-16T15:00:00", "price": 11.45, "child_at": "2026-11-16T11:00:00", "child_price": 11.45, "passed_by": null}},
-        "forces": {"last_stroke": [], "unfinished": [{"pair": "last_vs_first", "numerator": 2, "denominator": 0, "area": 0.48, "price": 0.6, "mean_volume": 0.91, "bar_count": 0.75, "between": {"min_abs_dif": 0.001, "dif_crossed_zero": true, "dea_crossed_zero": false}}]},
-        "zones": {"boundaries": {"last_start": "2026-10-30T13:30:00", "last_end": "2026-11-06T10:30:00", "unfinished_extreme": "2026-11-13T14:00:00"}, "objects": [{"kind": "stroke", "index": 0, "start_at": "2026-11-06T10:30:00", "end_at": "2026-11-09T14:30:00", "zone": "inside_unfinished", "crosses": []}, {"kind": "stroke", "index": 1, "start_at": "2026-11-09T14:30:00", "end_at": "2026-11-11T10:00:00", "zone": "inside_unfinished", "crosses": []}, {"kind": "stroke", "index": 2, "start_at": "2026-11-11T10:00:00", "end_at": "2026-11-13T14:00:00", "zone": "inside_unfinished", "crosses": []}, {"kind": "stroke", "index": 3, "start_at": "2026-11-13T14:00:00", "end_at": "2026-11-16T10:00:00", "zone": "after_extreme", "crosses": []}, {"kind": "unfinished", "index": null, "start_at": "2026-11-16T10:00:00", "end_at": "2026-11-16T10:30:00", "zone": "after_extreme", "crosses": []}, {"kind": "after_extreme", "index": null, "start_at": "2026-11-16T10:30:00", "end_at": "2026-11-16T11:00:00", "zone": "after_extreme", "crosses": []}]},
+        "points": {"last_stroke": {"at": "2026-11-06T15:00:00", "price": 11.3, "child_at": "2026-11-06T10:30:00", "child_price": 11.3, "passed_by": null}, "unfinished": {"at": "2026-11-13T15:00:00", "price": 11.65, "child_at": "2026-11-13T14:00:00", "child_price": 11.65, "passed_by": null}, "extension": null, "after_extreme": {"at": "2026-11-16T15:00:00", "price": 11.45, "child_at": "2026-11-16T11:00:00", "child_price": 11.45, "passed_by": null}},
+        "forces": {"child_starts_after": null, "last_stroke": [], "unfinished": [{"pair": "last_vs_first", "numerator": 2, "denominator": 0, "area": 0.48, "price": 0.6, "mean_volume": 0.91, "bar_count": 0.75, "between": {"min_abs_dif": 0.001, "dif_crossed_zero": true, "dea_crossed_zero": false}}]},
+        "zones": {"boundaries": {"last_start": "2026-10-30T13:30:00", "last_end": "2026-11-06T10:30:00", "unfinished_extreme": "2026-11-13T14:00:00"}, "child_starts_after": null, "objects": [{"kind": "stroke", "index": 0, "start_at": "2026-11-06T10:30:00", "end_at": "2026-11-09T14:30:00", "zone": "inside_unfinished", "crosses": []}, {"kind": "stroke", "index": 1, "start_at": "2026-11-09T14:30:00", "end_at": "2026-11-11T10:00:00", "zone": "inside_unfinished", "crosses": []}, {"kind": "stroke", "index": 2, "start_at": "2026-11-11T10:00:00", "end_at": "2026-11-13T14:00:00", "zone": "inside_unfinished", "crosses": []}, {"kind": "stroke", "index": 3, "start_at": "2026-11-13T14:00:00", "end_at": "2026-11-16T10:00:00", "zone": "after_extreme", "crosses": []}, {"kind": "unfinished", "index": null, "start_at": "2026-11-16T10:00:00", "end_at": "2026-11-16T10:30:00", "zone": "after_extreme", "crosses": []}, {"kind": "after_extreme", "index": null, "start_at": "2026-11-16T10:30:00", "end_at": "2026-11-16T11:00:00", "zone": "after_extreme", "crosses": []}]},
         "zones_reason": null
-      }
+      },
+      "child_reason": null
     },
     {
       "name": "30m",

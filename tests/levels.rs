@@ -97,10 +97,39 @@ fn states_agree_with_the_last_close_and_zones_partition() {
                 continue;
             };
             let b = &zones["boundaries"];
-            let b1 = b["last_start"].as_str().unwrap();
-            for o in zones["objects"].as_array().unwrap() {
-                // Placed objects end after the parent's last-stroke start.
-                assert!(o["end_at"].as_str().unwrap() > b1);
+            let objects = zones["objects"].as_array().unwrap();
+            if let Some(b1) = b["last_start"].as_str() {
+                for o in objects {
+                    // Placed objects end after the parent's last-stroke start.
+                    assert!(o["end_at"].as_str().unwrap() > b1);
+                }
+            } else {
+                kinds.insert(format!(
+                    "child_starts_after/{}",
+                    zones["child_starts_after"]
+                ));
+                assert!(objects.iter().all(|o| o["zone"] != "crosses_last_start"));
+            }
+            // Forces: last_vs_first from two same-direction strokes in the
+            // zone, last_vs_previous from three.
+            let parent_dir = &level["strokes"].as_array().unwrap().last().unwrap()["direction"];
+            let child = &case["response"]["levels"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|l| l["name"] == level["child"]["name"])
+                .unwrap()["strokes"];
+            let same = objects
+                .iter()
+                .filter(|o| o["kind"] == "stroke" && o["zone"] == "inside_last")
+                .filter(|o| {
+                    child[o["index"].as_u64().unwrap() as usize]["direction"] == *parent_dir
+                })
+                .count();
+            let rows = level["child"]["forces"]["last_stroke"].as_array().unwrap();
+            assert_eq!(rows.len(), [0, 0, 1].get(same).copied().unwrap_or(2));
+            if same == 2 {
+                kinds.insert("forces/two_strokes".into());
             }
         }
     }
@@ -118,10 +147,12 @@ fn states_agree_with_the_last_close_and_zones_partition() {
         "ended/versus_edge/\"inside\"",
         "retest_role/entry",
         "retest_role/member",
-        "zones_reason/no_parent_stroke",
         "zones_reason/last_start_no_child_bar",
         "zones_reason/last_end_no_child_bar",
         "zones_reason/unfinished_extreme_no_child_bar",
+        "forces/two_strokes",
+        "child_starts_after/\"last_start\"",
+        "latest/departure/tail",
     ] {
         assert!(kinds.contains(want), "no baseline covers {want}");
     }
@@ -224,7 +255,8 @@ fn short_levels_are_missing_material_and_the_finest_has_no_child() {
         assert!(level["strokes"].as_array().unwrap().is_empty());
         assert!(level["last_stroke_member"].is_null());
     }
-    assert_eq!(all[0]["child"]["name"], "fine");
-    assert_eq!(all[0]["child"]["zones_reason"], "no_parent_stroke");
-    assert!(all[1].get("child").is_none());
+    // A parent without strokes carries no child object, only the reason.
+    assert!(all[0]["child"].is_null());
+    assert_eq!(all[0]["child_reason"], "missing_material");
+    assert!(all[1].get("child").is_none() && all[1].get("child_reason").is_none());
 }

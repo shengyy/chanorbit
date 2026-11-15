@@ -109,17 +109,26 @@ impl Level {
             .map(|k| self.seg(k))
     }
 
-    /// A departed centre's departure and retest segments.
+    /// A departed centre's departure and retest segments, when the
+    /// departure runs in its exit direction.
     fn departure_of(&self, c: usize) -> Option<(Seg, Option<Seg>)> {
         let State::Departed {
-            departure, retest, ..
+            departure,
+            retest,
+            edge,
+            ..
         } = &self.centres[c].state
         else {
             return None;
         };
         let sequence = self.sequence();
         let get = |p: &Pos| sequence.iter().find(|s| s.pos == *p).copied();
-        Some((get(departure)?, retest.as_ref().and_then(get)))
+        let dep = get(departure)?;
+        let exit_up = *edge == "zg";
+        if (dep.direction == Direction::Up) != exit_up {
+            return None;
+        }
+        Some((dep, retest.as_ref().and_then(get)))
     }
 
     pub(crate) fn comparisons_of(&self) -> Comparisons {
