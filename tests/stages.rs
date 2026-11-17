@@ -55,6 +55,9 @@ fn baselines_match_field_by_field() {
                 "within"
             };
             seen_states.insert(format!("{}/{after}", s["kind"]));
+            if s["retest_broken"] == true {
+                seen_states.insert(format!("{}/retest_broken", s["kind"]));
+            }
             if s["first_known_at"].is_null() {
                 seen_states.insert(format!("{}/first_known_null", s["kind"]));
             }
@@ -87,6 +90,8 @@ fn baselines_match_field_by_field() {
         "\"third\"/first_known_null",
         "\"second_like\"/first_known_null",
         "revised_input",
+        "\"third\"/retest_broken",
+        "\"second_like\"/retest_broken",
     ] {
         assert!(seen_states.contains(want), "no baseline covers {want}");
     }
@@ -167,4 +172,77 @@ fn stage_errors_carry_the_stages_schema() {
     assert!(!ok);
     assert_eq!(v["schema"], "chanorbit.stages/2");
     assert_eq!(v["error"]["kind"], "invalid_input");
+}
+
+/// `request` with one daily bar per `(high, low)` after its last input.
+fn append(request: &Value, bars: &[(f64, f64)]) -> Value {
+    let mut out = request.clone();
+    let last = out["dt"]
+        .as_array()
+        .unwrap()
+        .last()
+        .unwrap()
+        .as_str()
+        .unwrap();
+    let mut dt = chanorbit::contract::parse_dt(last).unwrap();
+    for &(high, low) in bars {
+        dt += chrono::Duration::days(1);
+        let close = ((high + low) * 50.0).round() / 100.0;
+        for (field, v) in [
+            ("dt", json!(dt.format("%Y-%m-%dT%H:%M:%S").to_string())),
+            ("high", json!(high)),
+            ("low", json!(low)),
+            ("close", json!(close)),
+            ("vol", json!(1000.0)),
+        ] {
+            out[field].as_array_mut().unwrap().push(v);
+        }
+    }
+    out
+}
+
+/// A raw low below the retest's low before it is a fractal: the retest stays
+/// the last stroke (being extended) and the stage stands, marked broken.
+#[test]
+fn a_new_low_after_the_retest_marks_it_broken() {
+    let base = baseline("second.json.gz", 0);
+    let before = stages(&base);
+    let stage = &before["stages"][0];
+    assert_eq!(stage["kind"], "second");
+    assert_eq!(stage["retest"]["low"], 7.49);
+    assert_eq!(stage["retest_broken"], false);
+    // Touching the low does not break it; going below does.
+    for (low, broken) in [(7.49, false), (7.40, true)] {
+        let got = stages(&append(&base, &[(7.70, low)]));
+        let stage = &got["stages"][0];
+        assert_eq!(stage["retest"]["low"], 7.49, "{low}");
+        assert_eq!(stage["retest_broken"], broken, "{low}");
+        assert_eq!(stage["beyond_start"], false, "{low}");
+    }
+}
+
+/// A rebound stroke after the retest, then a raw low below the retest's low
+/// with no down stroke yet: the retest is no longer the last stroke, so no
+/// stage stands and there is nothing to mark.
+#[test]
+fn a_new_low_after_a_rebound_stroke_leaves_no_stage() {
+    let base = baseline("second.json.gz", 0);
+    #[rustfmt::skip]
+    let rebound = [(7.95, 7.70), (8.05, 7.85), (8.15, 7.95), (8.25, 8.05), (8.35, 8.15), (8.30, 8.10)];
+    let mut request = append(&base, &rebound);
+    request = append(&request, &[(8.0, 7.6), (7.7, 7.40)]);
+    let mut geometry_request = request.clone();
+    geometry_request
+        .as_object_mut()
+        .unwrap()
+        .remove("observe_from");
+    let (text, ok) = handle_command(Command::Geometry, &geometry_request.to_string());
+    assert!(ok, "{text}");
+    let g: Value = serde_json::from_str(&text).unwrap();
+    let last = g["strokes"].as_array().unwrap().last().unwrap();
+    assert_eq!(
+        (&last["direction"], &last["start_price"]),
+        (&json!("向上"), &json!(7.49))
+    );
+    assert_eq!(stages(&request)["stages"], json!([]));
 }

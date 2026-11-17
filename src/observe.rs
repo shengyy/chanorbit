@@ -1,5 +1,6 @@
-//! Per-bar replay of the buy-side stages: first-known time, stage age and
-//! whether the move after the retest passed its start. Definitions are owned by
+//! Per-bar replay of the buy-side stages: first-known time, stage age,
+//! whether the move after the retest passed its start and whether a later raw
+//! price broke the retest's low. Definitions are owned by
 //! `docs/structure-contract.md#observation`.
 use crate::analyzer::{Analyzer, Config};
 use crate::bar::RawBar;
@@ -62,6 +63,9 @@ pub struct StageFact {
     pub stage_age: Option<usize>,
     /// The available reverse candidate's end price is above the retest's high.
     pub beyond_start: bool,
+    /// A retained raw bar after the retest's end has a low below the retest's
+    /// low: the retest's low no longer stands.
+    pub retest_broken: bool,
 }
 
 /// Exact stroke identity: direction, endpoint times and prices, high, low.
@@ -150,6 +154,10 @@ pub fn observed_stages(
             let beyond = candidate.state == "available"
                 && candidate.kind.as_deref() == Some("reverse")
                 && candidate.end_price.is_some_and(|p| p > retest.high());
+            let broken = c
+                .raw_bars()
+                .iter()
+                .any(|b| b.dt > retest.end_at() && b.low < retest.low());
             let r = |i: usize| StrokeRef::from(&s[i]);
             StageFact {
                 kind: st.kind,
@@ -170,6 +178,7 @@ pub fn observed_stages(
                 first_known_at: known.map(|k| times[k]),
                 stage_age: known.zip(last_index).map(|(k, last)| last - k),
                 beyond_start: beyond,
+                retest_broken: broken,
             }
         })
         .collect()

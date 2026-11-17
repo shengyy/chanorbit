@@ -153,6 +153,7 @@ A stage's history comes from replaying the request one input at a time with the 
 - **`first_known_at`.** The first observed input at which the same stage stood. A stage already standing at the first observed input has `null`: it began before observation. The time is kept even if the stage disappears and comes back.
 - **`stage_age`.** Observed inputs after `first_known_at` up to the last input (0 when first known at the last input); `null` with `first_known_at`.
 - **`beyond_start`**, at the last input: the candidate stroke is available, of kind `reverse`, and its `end_price` is above the retest's high — the move after the retest has passed the retest's start.
+- **`retest_broken`**, at the last input: some retained raw bar with `dt` after the retest's `end_at` has a `low` strictly below the retest's low — the retest's low no longer stands (the retest is still extending, or the stage has failed). Independent of `beyond_start`; both describe only what followed the retest. The stage is still listed; whether to exclude it is the caller's choice. Only the stage's own retest is checked, and a stage stands only while its retest is the last stroke.
 
 Per observed input the engine evaluates the three stages once: the centre sequence over at most `max_strokes` strokes up to four times (second through its first point, third, second-like, and second-like's parent second through its first point), path guards over the retained raw bars with a binary search per NewBar element, and MACD over the retained raw bars only when a first point's geometry holds. A request of `m` inputs costs `O(m · (s + r log r))` for `s` retained strokes and `r` retained raw bars.
 
@@ -166,7 +167,7 @@ Per observed input the engine evaluates the three stages once: the centre sequen
 | `entry`, `departure`, `retest` | Role strokes: `start_at`, `end_at`, `high`, `low` |
 | `rebound`, `first_point_anchor` | Role strokes of second and second-like, otherwise `null` |
 | `parent` | Second-like only: the parent second's `rebound` and `retest`, otherwise `null` |
-| `first_known_at`, `stage_age`, `beyond_start` | [Observation](#observation) |
+| `first_known_at`, `stage_age`, `beyond_start`, `retest_broken` | [Observation](#observation) |
 
 ## Levels
 
