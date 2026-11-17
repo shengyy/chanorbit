@@ -126,13 +126,13 @@ pub fn interval_power(
 /// Stroke power; a raw bar the stroke snapshot holds inside `(start_at, end_at]` that
 /// is no longer retained makes areas and the mean volume unavailable.
 pub fn stroke_power(c: &Analyzer, s: &MacdSeries, stroke: &Stroke) -> Power {
-    let mut power = interval_power(c, s, stroke.start_fractal.dt, stroke.end_fractal.dt);
+    let mut power = interval_power(c, s, stroke.start_at(), stroke.end_at());
     let raw = c.raw_bars();
     let missing = stroke
         .newbars
         .iter()
         .flat_map(|b| &b.elements)
-        .filter(|b| b.dt > stroke.start_fractal.dt && b.dt <= stroke.end_fractal.dt)
+        .filter(|b| b.dt > stroke.start_at() && b.dt <= stroke.end_at())
         .any(|b| raw.binary_search_by_key(&b.dt, |r| r.dt).is_err());
     if missing {
         power.macd.status = "unavailable".into();

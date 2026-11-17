@@ -63,7 +63,7 @@ Every `dt` labels the **end** of its bar's period, and a bar still forming carri
 
 `geometry`: one object with `schema` (`chanorbit.geometry/1`), `id` (echo), then the [geometry snapshot](structure-contract.md#geometry-snapshot) fields at the top level.
 
-`stages`: one object with `schema` (`chanorbit.stages/1`), `id` (echo) and `stages` ([stages output](structure-contract.md#stages-output)).
+`stages`: one object with `schema` (`chanorbit.stages/2`), `id` (echo) and `stages` ([stages output](structure-contract.md#stages-output)).
 
 `levels`: one object with `schema` (`chanorbit.levels/1`), `id` (echo) and `levels` ([levels output](structure-contract.md#levels-output)). A complete example (illustrative values; the finest level has no `child`):
 

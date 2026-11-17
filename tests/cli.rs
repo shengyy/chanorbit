@@ -222,7 +222,7 @@ fn stages_batch_matches_baselines_in_order() {
         .collect();
     assert_eq!(got.len(), cases.len() + 1);
     assert_eq!(got[1]["error"]["kind"], "invalid_request");
-    assert_eq!(got[1]["schema"], "chanorbit.stages/1");
+    assert_eq!(got[1]["schema"], "chanorbit.stages/2");
     let answered = got.iter().take(1).chain(got.iter().skip(2));
     for (g, c) in answered.zip(&cases) {
         assert_same(g, &c["response"], "stages");

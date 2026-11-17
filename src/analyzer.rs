@@ -1,8 +1,9 @@
-//! Incremental analyzer: inclusion, stroke update/withdrawal, retention and
+//! Incremental analyzer: inclusion, stroke search and extension, retention and
 //! same-dt tail revision. Batch construction is the same per-bar loop.
 use crate::bar::{NewBar, RawBar, merge_inclusion};
 use crate::fractal::{Fractal, scan_fractals};
-use crate::stroke::{Direction, Stroke, find_stroke};
+use crate::stroke::{Direction, Stroke, beyond, find_stroke};
+use chrono::NaiveDateTime;
 use std::sync::Arc;
 
 /// Stroke parameters. Defaults: 50 strokes, 6 NewBars.
@@ -27,8 +28,10 @@ impl Default for Config {
 #[derive(Debug, Clone, Default)]
 struct TailUpdate {
     pending_bars: Vec<Arc<NewBar>>,
-    stroke_count: usize,
-    withdrawn: Option<Stroke>,
+    /// Strokes from `revised_from` on were changed or removed by the input;
+    /// `revised` holds them as they were before it.
+    revised_from: usize,
+    revised: Vec<Stroke>,
     pruned_strokes: Vec<Stroke>,
     pruned_raw: Vec<RawBar>,
 }
@@ -69,7 +72,7 @@ impl Analyzer {
         &self.pending_bars
     }
 
-    /// Retained strokes; the last one may still be withdrawn.
+    /// Retained strokes; the last one may still be extended.
     pub fn strokes(&self) -> &[Stroke] {
         &self.strokes
     }
@@ -95,17 +98,14 @@ impl Analyzer {
             let previous = std::mem::take(&mut self.tail);
             self.pending_bars = previous.pending_bars;
             self.strokes.splice(0..0, previous.pruned_strokes);
-            self.strokes.truncate(previous.stroke_count);
-            if let Some(stroke) = previous.withdrawn {
-                self.strokes.push(stroke);
-            }
+            self.strokes.truncate(previous.revised_from);
+            self.strokes.extend(previous.revised);
             self.raw_bars.pop();
             self.raw_bars.splice(0..0, previous.pruned_raw);
         }
-        self.tail = TailUpdate::default();
-        let mut tail = TailUpdate {
+        self.tail = TailUpdate {
             pending_bars: self.pending_bars.clone(),
-            stroke_count: self.strokes.len(),
+            revised_from: self.strokes.len(),
             ..TailUpdate::default()
         };
         self.raw_bars.push(bar);
@@ -123,80 +123,158 @@ impl Analyzer {
             }
         }
 
-        let removed = self.update_strokes();
-        if self.strokes.len() < tail.stroke_count {
-            tail.withdrawn = removed;
-        }
+        self.update_strokes();
         if self.strokes.len() > self.config.max_strokes {
             let excess = self.strokes.len() - self.config.max_strokes;
-            tail.pruned_strokes = self.strokes.drain(..excess).collect();
+            self.tail.pruned_strokes = self.strokes.drain(..excess).collect();
         }
         if let Some(first) = self.strokes.first() {
             let start_at = first.start_fractal.elements[0].dt;
             let keep_from = self.raw_bars.partition_point(|b| b.dt < start_at);
-            tail.pruned_raw = self.raw_bars.drain(..keep_from).collect();
+            self.tail.pruned_raw = self.raw_bars.drain(..keep_from).collect();
         }
-        self.tail = tail;
     }
 
-    /// Returns the withdrawn tail stroke, if any.
-    fn update_strokes(&mut self) -> Option<Stroke> {
+    /// Record strokes from `i` on before this input changes or removes them.
+    /// Strokes before `revised_from` are still as they were before the input.
+    fn revise(&mut self, i: usize) {
+        let from = self.tail.revised_from;
+        if i < from {
+            let saved = self.strokes[i..from].to_vec();
+            self.tail.revised.splice(0..0, saved);
+            self.tail.revised_from = i;
+        }
+    }
+
+    fn pop_stroke(&mut self) -> Option<Stroke> {
+        self.revise(self.strokes.len().checked_sub(1)?);
+        self.strokes.pop()
+    }
+
+    fn update_strokes(&mut self) {
         if self.pending_bars.len() < 3 {
-            return None;
+            return;
         }
         if self.strokes.is_empty() {
-            let fractals = scan_fractals(&self.pending_bars);
-            let first = fractals.first()?;
-            let mut start_fractal = first;
-            for x in fractals.iter().filter(|x| x.mark == first.mark) {
-                let better = match first.mark {
-                    crate::fractal::Mark::Bottom => x.low <= start_fractal.low,
-                    crate::fractal::Mark::Top => x.high >= start_fractal.high,
-                };
-                if better {
-                    start_fractal = x;
-                }
-            }
-            let start = start_fractal.elements[0].dt;
-            let bars: Vec<_> = self
-                .pending_bars
-                .iter()
-                .filter(|b| b.dt >= start)
-                .cloned()
-                .collect();
-            let (stroke, rest) = find_stroke(&bars, self.config.min_stroke_bars);
-            if let Some(stroke) = stroke {
-                self.strokes.push(stroke);
-            }
-            self.pending_bars = bars[rest..].to_vec();
-            return None;
+            self.first_stroke();
+            return;
         }
+        self.extend_last_stroke();
+        let window = std::mem::take(&mut self.pending_bars);
+        self.settle(window);
+    }
 
-        let (stroke, rest) = find_stroke(&self.pending_bars, self.config.min_stroke_bars);
+    /// Before any stroke: start at the most extreme fractal of the first
+    /// fractal's mark (later ones win ties) and search from there.
+    fn first_stroke(&mut self) {
+        let fractals = scan_fractals(&self.pending_bars);
+        let Some(first) = fractals.first() else {
+            return;
+        };
+        let mut start_fractal = first;
+        for x in fractals.iter().filter(|x| x.mark == first.mark) {
+            let better = match first.mark {
+                crate::fractal::Mark::Bottom => x.low <= start_fractal.low,
+                crate::fractal::Mark::Top => x.high >= start_fractal.high,
+            };
+            if better {
+                start_fractal = x;
+            }
+        }
+        let start = start_fractal.elements[0].dt;
+        let bars: Vec<_> = self
+            .pending_bars
+            .iter()
+            .filter(|b| b.dt >= start)
+            .cloned()
+            .collect();
+        let (stroke, rest) = find_stroke(&bars, self.config.min_stroke_bars);
         if let Some(stroke) = stroke {
             self.strokes.push(stroke);
         }
-        self.pending_bars.drain(..rest);
+        self.pending_bars = bars[rest..].to_vec();
+    }
 
-        let last_stroke = self.strokes.last().unwrap();
-        let broken = self
-            .pending_bars
-            .last()
-            .is_some_and(|b| match last_stroke.direction {
-                Direction::Up => b.high > last_stroke.high(),
-                Direction::Down => b.low < last_stroke.low(),
-            });
-        if broken {
-            let keep = last_stroke.newbars.len() - 2;
-            let merge_point = last_stroke.newbars[keep].dt;
-            self.pending_bars = last_stroke.newbars[..keep]
-                .iter()
-                .chain(self.pending_bars.iter().filter(|b| b.dt >= merge_point))
-                .cloned()
-                .collect();
-            return self.strokes.pop();
+    /// While an unfinished NewBar is beyond the last stroke's end, the stroke
+    /// is searched again. If a raw bar after its end is already beyond its
+    /// start, it cannot extend: it is reopened with the stroke before it, which
+    /// is searched again from its start and replaces both once it ends further
+    /// beyond. Otherwise the last stroke is searched again from its own start
+    /// and replaced by a stroke ending further beyond; else it stays.
+    fn extend_last_stroke(&mut self) {
+        if !self.last_stroke_extends() {
+            return;
         }
-        None
+        let min = self.config.min_stroke_bars;
+        let n = self.strokes.len();
+        let last = &self.strokes[n - 1];
+        if n >= 2 && !last.holds_end(NaiveDateTime::MAX, &self.pending_bars) {
+            let before = &self.strokes[n - 2];
+            let window = before.reopen(&last.reopen(&self.pending_bars));
+            if let (Some(stroke), _) = find_stroke(&window, min)
+                && beyond(before.direction, stroke.end.price, before.end_fractal.price)
+            {
+                self.pop_stroke();
+                self.pop_stroke();
+                self.settle(window);
+                return;
+            }
+        }
+        let window = last.reopen(&self.pending_bars);
+        if let (Some(stroke), _) = find_stroke(&window, min)
+            && beyond(last.direction, stroke.end.price, last.end.price)
+        {
+            self.pop_stroke();
+            self.settle(window);
+        }
+    }
+
+    /// Append the stroke found in `window`, which starts at the last stroke's
+    /// end fractal, and keep the rest unfinished; the last stroke then ends
+    /// where the new one starts. When that would carry the last stroke across a
+    /// raw price beyond its own start, the last two strokes are reopened and the
+    /// stroke is searched again from the start of the one before them, as often
+    /// as needed. A search that does not reach the new stroke's end, or no
+    /// stroke before them, keeps the strokes and links the stroke as found.
+    fn settle(&mut self, window: Vec<Arc<NewBar>>) {
+        let min = self.config.min_stroke_bars;
+        let (Some(found), found_rest) = find_stroke(&window, min) else {
+            self.pending_bars = window;
+            return;
+        };
+        // `merged`: the stroke searched again over reopened strokes, its window
+        // and rest; `kept`: the strokes it follows.
+        let mut merged: Option<(Stroke, Vec<Arc<NewBar>>, usize)> = None;
+        let mut kept = self.strokes.len();
+        loop {
+            let (stroke, bars) = merged.as_ref().map_or((&found, &window), |m| (&m.0, &m.1));
+            if kept == 0 || self.strokes[kept - 1].holds_end(stroke.start.at, bars) {
+                break;
+            }
+            let reopened = (kept >= 2).then(|| {
+                let later = self.strokes[kept - 1].reopen(bars);
+                self.strokes[kept - 2].reopen(&later)
+            });
+            match reopened.map(|bars| (find_stroke(&bars, min), bars)) {
+                Some(((Some(again), r), bars)) if again.end_fractal.dt >= stroke.end_fractal.dt => {
+                    merged = Some((again, bars, r));
+                    kept -= 2;
+                }
+                _ => {
+                    merged = None;
+                    kept = self.strokes.len();
+                    break;
+                }
+            }
+        }
+        let (stroke, bars, rest) = merged.unwrap_or((found, window, found_rest));
+        self.revise(kept.saturating_sub(1));
+        self.strokes.truncate(kept);
+        if let Some(last) = self.strokes.last_mut() {
+            last.end = stroke.start;
+        }
+        self.strokes.push(stroke);
+        self.pending_bars = bars[rest..].to_vec();
     }
 
     /// Fractals in the unfinished NewBars.
@@ -230,9 +308,12 @@ impl Analyzer {
     /// Whether some unfinished NewBar is beyond the last stroke's end side.
     pub fn last_stroke_extends(&self) -> bool {
         self.strokes.last().is_some_and(|stroke| {
-            self.pending_bars.iter().any(|b| match stroke.direction {
-                Direction::Up => b.high > stroke.high(),
-                Direction::Down => b.low < stroke.low(),
+            self.pending_bars.iter().any(|b| {
+                let boundary = match stroke.direction {
+                    Direction::Up => b.high,
+                    Direction::Down => b.low,
+                };
+                beyond(stroke.direction, boundary, stroke.end.price)
             })
         })
     }

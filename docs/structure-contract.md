@@ -19,7 +19,7 @@ The first two inputs become NewBars as they are. Afterwards, with the last two N
 
 Without inclusion `k3` becomes a new NewBar.
 
-**Element cap.** A NewBar therefore keeps at most 101 raw bars: its first 100 and the latest; raw bars merged in between are no longer among its elements. Prices and `dt` of the NewBar are unaffected, and so are fractals, `confirmed_at` (a first element), strokes and MACD (computed over retained raw bars). Only lookups of a raw bar inside a NewBar see the cap: the candidate's `anchor_price_at` and `end_price_at`. When the raw bar holding the price was displaced, an earlier element with the same price is used, or the candidate is `unavailable` (`anchor_price_source_missing` / `no_forward_price_source`).
+**Element cap.** A NewBar therefore keeps at most 101 raw bars: its first 100 and the latest; raw bars merged in between are no longer among its elements. Prices and `dt` of the NewBar are unaffected, and so are fractals, `confirmed_at` (a first element), strokes and MACD (computed over retained raw bars). Only lookups of a raw bar inside a NewBar see the cap: stroke start points ([endpoints](#strokes)) and the candidate's `anchor_price_at` and `end_price_at`. When the raw bar holding the price was displaced, an earlier element with the same price is used, or the candidate is `unavailable` (`anchor_price_source_missing` / `no_forward_price_source`).
 
 ## Fractals
 
@@ -35,9 +35,18 @@ The fractal list is every stroke's fractals except each stroke's first, then the
 
 **First stroke.** Before any stroke exists, the start is the most extreme fractal of the first fractal's mark (later fractals win ties); the window is cut to start at that fractal's first NewBar, then searched.
 
-**Later strokes.** After each input the unfinished window is searched again; a found stroke is appended.
+**Endpoints.** The fractals `A` and `B` identify a stroke; its endpoints (`start_at`/`start_price`, `end_at`/`end_price`) are raw prices. The start is the most extreme raw price on the start side (lowest low for an up stroke, highest high for a down one; the first wins ties) over the raw elements of the stroke's NewBars from `A`'s middle NewBar up to, not including, the raw bar at `B`'s `dt` — `A`'s price unless inclusion merged a more extreme raw bar out of sight. The previous stroke ends where the next starts: appending a stroke moves the previous stroke's end to the new start. The end of the last stroke is `B`'s price at `B`'s `dt`. So no raw bar from a stroke's start to the bar before its end lies beyond its start (but see the first retained stroke under *Append* and the *End bar* note); the path can exceed the end inside the span only where inclusion hid a raw price that no fractal shows.
 
-**Withdrawal.** After the search, if the latest unfinished NewBar is beyond the last stroke's end (higher than its high for an up stroke, lower than its low for a down stroke), the last stroke is removed and the unfinished window becomes that stroke's NewBars without its last two, followed by the current unfinished NewBars from the stroke's second-to-last NewBar onward. Only the latest NewBar is tested, and the search is not repeated in the same input.
+**Reopening.** Reopening a stroke gives the window to search again from its start: its NewBars without `B`'s middle and last, then the current window from `B`'s middle NewBar on. A stroke **holds its end** up to a time when no raw bar from `B`'s `dt` up to that time is beyond its start.
+
+**Later strokes.** After each input:
+
+1. **Extension.** When some unfinished NewBar is beyond the last stroke's end (higher than its end for an up stroke, lower for a down stroke), the last stroke is extending. If a raw bar after its end is already beyond its start (it does not hold its end), it cannot extend across that price: the last two strokes are reopened together and searched again from the earlier one's start; when the stroke found ends beyond the earlier one's end fractal, both are replaced by it. Otherwise the last stroke is reopened and searched again from its own start, and replaced when the stroke found ends further beyond. Else it stays as it is, still extending: an extending stroke is never removed.
+2. **Append.** The unfinished window is searched; a found stroke is appended and the previous stroke's end moves to its start. When that move would carry the previous stroke across a raw price beyond the previous stroke's own start (it does not hold its end up to the new start), the last two strokes are reopened and the stroke is searched again from the start of the one before them, repeated while needed. A search that does not reach the found stroke's end, or no stroke before the two, keeps the strokes and links the found stroke as it is; the first retained stroke can then hold a raw price beyond its start.
+
+The unfinished window after a stroke is formed starts at its `B`'s first NewBar. Every change of this input — an extension, reopened strokes, moved ends, retention — is undone by a revision of the same `dt`.
+
+**End bar.** A raw bar holds both a high and a low and their order inside the bar is unknown. When the bar holding a stroke's end also reaches beyond the stroke's start (a wide opening bar, for example), both prices stand: the end is not moved to the bar's other side.
 
 **Retention.** At most `max_strokes` strokes are kept (default 50); older ones are dropped, and raw bars before the first retained stroke's first raw bar are dropped with them. MACD, power and indices are computed over what is retained.
 
@@ -84,8 +93,8 @@ For a stroke the interval is its endpoint fractal times. If a raw bar inside the
 Display-only geometry after the last stroke; it never runs the stroke search and never confirms a stroke.
 
 - No stroke: `state = none`, `reason = no_identified_stroke`.
-- The anchor is the last stroke's end fractal (`anchor_at`, `anchor_price`). `anchor_price_at` is the raw bar inside the anchor's NewBars at that price (the one at `anchor_at` first, else the earliest); none → `unavailable / anchor_price_source_missing`. The anchor must be in the unfinished window, else `unavailable / anchor_not_in_engine_tail`.
-- `kind = extension` when the last stroke extends (some unfinished NewBar is beyond its end), searching the same direction from the anchor's NewBar; otherwise `kind = reverse`, searching the opposite direction after it.
+- The anchor is the last stroke's end fractal (`anchor_at`, `anchor_price`), which is the last stroke's end. `anchor_price_at` is the raw bar inside the anchor's NewBars at that price (the one at `anchor_at` first, else the earliest); none → `unavailable / anchor_price_source_missing`. The anchor must be in the unfinished window, else `unavailable / anchor_not_in_engine_tail`.
+- `kind = extension` when the last stroke extends (some unfinished NewBar is beyond its end and no stroke search has replaced it yet, see [later strokes](#strokes)), searching the same direction from the anchor's NewBar; otherwise `kind = reverse`, searching the opposite direction after it.
 - The end is the most extreme unfinished NewBar boundary beyond the anchor price (the first wins ties); none → `state = none`, `reason = no_forward_extreme`. `end_price_at` is the raw bar after the anchor holding that price (the one at the NewBar's time first); none → `unavailable / no_forward_price_source`; if that raw bar or the anchor raw bar is not retained → `unavailable / missing_coverage`. Non-finite prices → `unavailable / non_finite`.
 - Otherwise `state = available` with `end_price` and `end_price_at`.
 
@@ -96,7 +105,7 @@ Every fact appears once. Field names follow the consumer's vocabulary.
 | Field | Meaning |
 |---|---|
 | `status` | `ready` with at least one stroke, otherwise `missing_material` |
-| `strokes` | Every retained stroke, oldest first: `direction`, `start_at`, `end_at`, `high`, `low` (endpoint extremes; the path inside can exceed them), `start_price`, `end_price`, `price_amplitude` (`|end_price − start_price|` rounded to two decimals), `newbar_count`, `finished`, `power` |
+| `strokes` | Every retained stroke, oldest first: `direction`, `start_at`, `end_at`, `high`, `low` (endpoint extremes; the path inside can exceed them only on the end side, where inclusion hid a raw price), `start_price`, `end_price`, `price_amplitude` (`|end_price − start_price|` rounded to two decimals), `newbar_count`, `finished`, `power` |
 | `pending_direction` | Unfinished direction, or `null` |
 | `pending_newbar_count` | NewBars in the unfinished window |
 | `fractals` | Fractal list from the second-to-last stroke's `start_at` on (all of it with fewer than two strokes): `dt`, `mark`, `price`, `confirmed_at` |
@@ -138,14 +147,12 @@ Notation: `S` is the retained stroke list, `n` its length, `F` the finished coun
 
 A stage's history comes from replaying the request one input at a time with the same analyzer; nothing is inferred backwards.
 
-- **Revisions.** Each `dt` is observed once, after its last version. An earlier version of a time is never observed: it records no first-known time and takes part in no withdrawal. A `stages` request carrying revisions therefore answers exactly as the same request holding only the last version of each `dt`. There is no notion of revising an input that was already observed.
-- **Observed inputs.** Observation starts at the first input with `dt ≥ observe_from`, or at the first input when `observe_from` is absent; earlier inputs only build state. When no input is observed (`observe_from` after the last input), every `first_known_at` and `stage_age` is `null` and no withdrawal is recorded.
+- **Revisions.** Each `dt` is observed once, after its last version. An earlier version of a time is never observed: it records no first-known time. A `stages` request carrying revisions therefore answers exactly as the same request holding only the last version of each `dt`. There is no notion of revising an input that was already observed.
+- **Observed inputs.** Observation starts at the first input with `dt ≥ observe_from`, or at the first input when `observe_from` is absent; earlier inputs only build state. When no input is observed (`observe_from` after the last input), every `first_known_at` and `stage_age` is `null`.
 - **Same stage.** Kind, the centre's `zd`, `zg` and first three members, and every role stroke (entry, departure, rebound, first-point anchor, retest, parent rebound and retest). Strokes compare by direction, `start_at`, `end_at`, start and end price, high and low. A centre taking more members keeps the stage; any role stroke changing — the retest reaching a new low, for example — makes a new stage.
 - **`first_known_at`.** The first observed input at which the same stage stood. A stage already standing at the first observed input has `null`: it began before observation. The time is kept even if the stage disappears and comes back.
 - **`stage_age`.** Observed inputs after `first_known_at` up to the last input (0 when first known at the last input); `null` with `first_known_at`.
-- **Withdrawal.** Between two observed inputs the last stroke goes from an up stroke `U` back to a down stroke `D` that starts earlier, with `U.start_at = D.end_at` and `U.low = D.low`. The first observed input is not compared. A later withdrawal back to the same `D` (same `end_at` and low) replaces the earlier record.
-- **`withdrawn_rebound`.** When the stage's retest has the `end_at` and low of such a `D`: the latest withdrawn `U` (`start_at`, `end_at`, `high`, `low`), `observed_at` — the observed input from which that version of `U` was the last stroke — and `withdrawn_at` — the observed input at which it was withdrawn. Otherwise `null`.
-- **`beyond_start`**, at the last input: the candidate stroke is available, of kind `reverse`, and its `end_price` is above the retest's high — the move after the retest has passed the retest's start. Independent of `withdrawn_rebound`; both can hold.
+- **`beyond_start`**, at the last input: the candidate stroke is available, of kind `reverse`, and its `end_price` is above the retest's high — the move after the retest has passed the retest's start.
 
 Per observed input the engine evaluates the three stages once: the centre sequence over at most `max_strokes` strokes up to four times (second through its first point, third, second-like, and second-like's parent second through its first point), path guards over the retained raw bars with a binary search per NewBar element, and MACD over the retained raw bars only when a first point's geometry holds. A request of `m` inputs costs `O(m · (s + r log r))` for `s` retained strokes and `r` retained raw bars.
 
@@ -159,7 +166,7 @@ Per observed input the engine evaluates the three stages once: the centre sequen
 | `entry`, `departure`, `retest` | Role strokes: `start_at`, `end_at`, `high`, `low` |
 | `rebound`, `first_point_anchor` | Role strokes of second and second-like, otherwise `null` |
 | `parent` | Second-like only: the parent second's `rebound` and `retest`, otherwise `null` |
-| `first_known_at`, `stage_age`, `withdrawn_rebound`, `beyond_start` | [Observation](#observation) |
+| `first_known_at`, `stage_age`, `beyond_start` | [Observation](#observation) |
 
 ## Levels
 

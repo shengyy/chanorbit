@@ -144,7 +144,7 @@ fn states_agree_with_the_last_close_and_zones_partition() {
         "latest/departure/after_extreme",
         "latest/against_exit_side",
         "ended/against_exit_side",
-        "ended/versus_edge/\"inside\"",
+        "ended/versus_edge/\"beyond\"",
         "retest_role/entry",
         "retest_role/member",
         "zones_reason/last_start_no_child_bar",

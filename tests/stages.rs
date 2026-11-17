@@ -49,9 +49,7 @@ fn baselines_match_field_by_field() {
         let got = stages(&case["request"]);
         diff.compare("response", &got, &case["response"]);
         for s in got["stages"].as_array().unwrap() {
-            let after = if !s["withdrawn_rebound"].is_null() {
-                "withdrawn_rebound"
-            } else if s["beyond_start"] == true {
+            let after = if s["beyond_start"] == true {
                 "beyond_start"
             } else {
                 "within"
@@ -84,9 +82,7 @@ fn baselines_match_field_by_field() {
         "\"third\"/within",
         "\"second_like\"/within",
         "\"second\"/beyond_start",
-        "\"second\"/withdrawn_rebound",
         "\"second_like\"/beyond_start",
-        "\"second_like\"/withdrawn_rebound",
         "\"second\"/first_known_null",
         "\"third\"/first_known_null",
         "\"second_like\"/first_known_null",
@@ -105,7 +101,7 @@ fn baseline(file: &str, index: usize) -> Value {
 
 #[test]
 fn revisions_are_observed_once_after_the_last_version() {
-    let clean = baseline("rebound_withdrawn.json.gz", 0);
+    let clean = baseline("second.json.gz", 0);
     let mut revised = clean.clone();
     // Insert an earlier, different version before every fifth bar.
     let n = clean["dt"].as_array().unwrap().len();
@@ -126,7 +122,9 @@ fn revisions_are_observed_once_after_the_last_version() {
         revised[field] = Value::Array(out);
     }
     assert!(revised["dt"].as_array().unwrap().len() > n);
-    assert_eq!(stages(&revised), stages(&clean));
+    let answer = stages(&clean);
+    assert!(!answer["stages"].as_array().unwrap().is_empty());
+    assert_eq!(stages(&revised), answer);
 }
 
 #[test]
@@ -151,7 +149,7 @@ fn observe_from_is_checked_and_belongs_to_stages_only() {
     let (text, ok) = handle_command(Command::Stages, &request.to_string());
     let v: Value = serde_json::from_str(&text).unwrap();
     assert!(!ok);
-    assert_eq!(v["schema"], "chanorbit.stages/1");
+    assert_eq!(v["schema"], "chanorbit.stages/2");
     assert_eq!(v["error"]["kind"], "invalid_request");
 
     request["observe_from"] = json!("2026-01-05T15:00:00");
@@ -167,6 +165,6 @@ fn stage_errors_carry_the_stages_schema() {
     let (text, ok) = handle_command(Command::Stages, "[1]");
     let v: Value = serde_json::from_str(&text).unwrap();
     assert!(!ok);
-    assert_eq!(v["schema"], "chanorbit.stages/1");
+    assert_eq!(v["schema"], "chanorbit.stages/2");
     assert_eq!(v["error"]["kind"], "invalid_input");
 }

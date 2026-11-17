@@ -13,7 +13,7 @@ use serde_json::Value;
 /// Output contract version of `geometry`, carried by each of its responses.
 pub const SCHEMA: &str = "chanorbit.geometry/1";
 /// Output contract version of `stages`.
-pub const STAGES_SCHEMA: &str = "chanorbit.stages/1";
+pub const STAGES_SCHEMA: &str = "chanorbit.stages/2";
 /// Output contract version of `levels`.
 pub const LEVELS_SCHEMA: &str = "chanorbit.levels/1";
 

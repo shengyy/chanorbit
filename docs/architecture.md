@@ -8,15 +8,15 @@ One crate, `chanorbit`: a library (`src/lib.rs`) holding the engine and the JSON
 |---|---|
 | `bar` | `RawBar`, `NewBar` and the inclusion merge |
 | `fractal` | `Mark`, `Fractal`, detection, `confirmed_at` |
-| `stroke` | `Direction`, `Stroke` and the single-stroke search over a NewBar window |
-| `analyzer` | `Analyzer`: per-bar update, first stroke, withdrawal, retention, same-dt revision, finished strokes, fractal list, unfinished direction |
+| `stroke` | `Direction`, `Stroke`, its raw endpoints, reopening and the single-stroke search over a NewBar window |
+| `analyzer` | `Analyzer`: per-bar update, first stroke, extension, appending with linked endpoints, retention, same-dt revision, finished strokes, fractal list, unfinished direction |
 | `centre` | `Centre` geometry, the touch rule and the canonical centre sequence |
 | `macd` | MACD(12, 26, 9) series over retained closes |
 | `power` | Interval power, stroke power, MACD bars and segments |
 | `candidate` | Candidate stroke after the last stroke |
 | `geometry` | The geometry snapshot: stroke facts, fractal window, centre sequence and indices, relation, candidate power |
 | `stage` | Confirmed buy-side stages of one analyzer state: first-point anchor, second, third, second-like, path guard |
-| `observe` | Per-input replay of the stages: stage identity, first-known time, age, withdrawal record, after-retest state, stage facts |
+| `observe` | Per-input replay of the stages: stage identity, first-known time, age, after-retest state, stage facts |
 | `levels` | One level of a `levels` request: stroke window, raw and DIF extremes, unfinished segment, path after its extreme, tail, centre list, last close position, centre state from the raw path |
 | `levels_compare` | Same-direction comparison rows of a level's segments |
 | `levels_child` | The `levels` output: every level built coarsest first (a child's window covers its parent's last stroke), child times, points with `passed_by`, forces and zones |
@@ -28,7 +28,7 @@ One crate, `chanorbit`: a library (`src/lib.rs`) holding the engine and the JSON
 ```text
 columnar request ─► contract::run ─► RawBar ─► Analyzer::update (per bar)
                                                   │  inclusion ─► NewBar window
-                                                  │  stroke search / withdrawal ─► strokes
+                                                  │  stroke search / extension / linking ─► strokes
                                                   │  retention pruning
                                                   ▼
                          geometry::geometry: strokes + power, fractals, centres,
@@ -36,7 +36,6 @@ columnar request ─► contract::run ─► RawBar ─► Analyzer::update (per
 
 columnar request ─► contract::run_stages ─► observe::observed_stages
                        per input: Analyzer::update ─► stage::stages ─► identity → first seen
-                                  last stroke ─► withdrawal record
                        last input: stage::stages + candidate ─► stage facts ─► stages response
 
 levels request ─► contract::run_levels ─► per level, coarsest first: Analyzer::from_bars
