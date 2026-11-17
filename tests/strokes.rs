@@ -158,6 +158,63 @@ fn a_broken_start_hands_the_end_back_and_an_extending_stroke_stays() {
     }
 }
 
+/// A wide bar holds a stroke's end and a high beyond its start (the end bar
+/// note); the next stroke starts at a low that inclusion hid, two bars later.
+/// Moving the end there would put that high inside the stroke, so the stroke
+/// starts again at it and the stroke before ends there.
+#[test]
+fn a_moved_end_restarts_the_stroke_across_its_end_bar() {
+    #[rustfmt::skip]
+    let input = bars(&[
+        (13.76, 13.42), (13.60, 13.40), (13.78, 13.51), (13.96, 13.75), (14.45, 14.37),
+        (14.24, 14.23), (14.20, 14.07), (13.80, 13.64),
+        (14.51, 12.51), // 8: end of the down stroke and a high beyond its start
+        (12.76, 12.64), (12.80, 12.66),
+        (13.84, 11.84), // 11: a low merged upward out of sight
+        (12.94, 12.61), (14.02, 13.76), (13.83, 13.66),
+    ]);
+    let config = Config::default();
+    let at = |n: usize| Analyzer::from_bars(input[..n].iter().copied(), config);
+    let (down, up) = (Direction::Down, Direction::Up);
+    // Before the next stroke: the end bar holds both prices.
+    assert_eq!(
+        ends(&at(14)),
+        [(up, 13.40, 1, 14.45, 4), (down, 14.45, 4, 12.51, 8)]
+    );
+    let c = at(15);
+    assert_eq!(
+        ends(&c),
+        [
+            (up, 13.40, 1, 14.51, 8),
+            (down, 14.51, 8, 11.84, 11),
+            (up, 11.84, 11, 14.02, 13)
+        ]
+    );
+    for n in 1..=input.len() {
+        let c = at(n);
+        assert!(
+            c.strokes().iter().all(|s| starts_are_extreme(&c, s)),
+            "input {n}"
+        );
+    }
+    // Earlier versions of every input leave no trace of the restart.
+    let revised: Vec<RawBar> = input
+        .iter()
+        .flat_map(|b| {
+            [
+                RawBar {
+                    high: b.high + 0.3,
+                    low: b.low - 0.3,
+                    ..*b
+                },
+                *b,
+            ]
+        })
+        .collect();
+    let all = Analyzer::from_bars(revised, config);
+    assert_eq!(geometry(&all), geometry(&c));
+}
+
 /// Revisions undo extensions, reopened strokes and moved endpoints exactly.
 #[test]
 fn revisions_undo_endpoint_changes() {
@@ -192,8 +249,7 @@ fn revisions_undo_endpoint_changes() {
 /// After every input of every baseline: starts are extreme, the last end is
 /// extreme among the unfinished fractals, and the last stroke never returns
 /// to the stroke before it (an extending stroke is kept, not withdrawn). The
-/// first retained stroke has no stroke before it to reopen, so a later start
-/// linked onto its end may carry it across its own start (`f5_corrections`).
+/// first retained stroke is checked too.
 #[test]
 fn baselines_keep_endpoints_extreme_after_every_input() {
     let mut checked = 0;
@@ -207,7 +263,7 @@ fn baselines_keep_endpoints_extreme_after_every_input() {
             if input.get(i + 1).is_some_and(|b| b.dt == bar.dt) {
                 continue;
             }
-            for s in c.strokes().iter().skip(1) {
+            for s in c.strokes() {
                 assert!(starts_are_extreme(&c, s), "{name} input {i}: {s:?}");
             }
             assert!(end_is_extreme(&c), "{name} input {i}");

@@ -235,7 +235,8 @@ impl Analyzer {
     /// raw price beyond its own start, the last two strokes are reopened and the
     /// stroke is searched again from the start of the one before them, as often
     /// as needed. A search that does not reach the new stroke's end, or no
-    /// stroke before them, keeps the strokes and links the stroke as found.
+    /// stroke before them, keeps the strokes and links the stroke as found;
+    /// [`Analyzer::restart_back`] then moves the earlier starts.
     fn settle(&mut self, window: Vec<Arc<NewBar>>) {
         let min = self.config.min_stroke_bars;
         let (Some(found), found_rest) = find_stroke(&window, min) else {
@@ -275,6 +276,30 @@ impl Analyzer {
         }
         self.strokes.push(stroke);
         self.pending_bars = bars[rest..].to_vec();
+        self.restart_back(bars);
+    }
+
+    /// After the last stroke was linked: while the stroke before it would then
+    /// span a raw price beyond its own start, that stroke starts again at the
+    /// most extreme start-side price up to its new end, and the stroke before
+    /// it ends there in turn. `later` is the last stroke's window.
+    fn restart_back(&mut self, mut later: Vec<Arc<NewBar>>) {
+        let mut i = self.strokes.len() - 1;
+        while i > 0 {
+            let until = self.strokes[i].start.at;
+            let previous = &self.strokes[i - 1];
+            if previous.holds_end(until, &later) {
+                return;
+            }
+            let start = previous.restart(until, &later);
+            later = previous.newbars.clone();
+            self.revise((i - 1).saturating_sub(1));
+            self.strokes[i - 1].start = start;
+            if i >= 2 {
+                self.strokes[i - 2].end = start;
+            }
+            i -= 1;
+        }
     }
 
     /// Fractals in the unfinished NewBars.

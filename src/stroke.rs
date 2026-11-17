@@ -1,5 +1,5 @@
 //! Strokes (笔), their endpoints and the single-stroke search over unfinished NewBars.
-use crate::bar::NewBar;
+use crate::bar::{NewBar, RawBar};
 use crate::fractal::{Fractal, Mark, scan_fractals};
 use chrono::NaiveDateTime;
 use serde::{Deserialize, Serialize};
@@ -97,6 +97,26 @@ impl Stroke {
             .collect()
     }
 
+    /// The start once this stroke ends at `until`: as found, but over its own
+    /// raw bars up to its end fractal's and then `later`'s up to `until` (the
+    /// end fractal's own bar included). `later` starts at the end fractal's
+    /// first NewBar.
+    pub fn restart(&self, until: NaiveDateTime, later: &[Arc<NewBar>]) -> Endpoint {
+        let from = self
+            .newbars
+            .partition_point(|b| b.dt < self.start_fractal.dt);
+        let end = self.end_fractal.dt;
+        let own = self.newbars[from..]
+            .iter()
+            .flat_map(|b| &b.elements)
+            .take_while(|r| r.dt < end);
+        let after = later
+            .iter()
+            .flat_map(|b| &b.elements)
+            .filter(|r| r.dt >= end && r.dt < until);
+        extreme_start(own.chain(after), &self.start_fractal, self.direction)
+    }
+
     /// Whether this stroke can end at a raw bar at `until`: no raw bar in
     /// `later` from its end fractal's up to `until` is beyond its start.
     /// `later` starts at the end fractal's first NewBar.
@@ -125,24 +145,32 @@ pub fn beyond(direction: Direction, price: f64, than: f64) -> bool {
 }
 
 /// The start of a stroke identified by `start_fractal` and `end_fractal`: the
-/// raw bar most beyond the start fractal's price on its side (the first wins
-/// ties) from the start fractal's middle NewBar up to, not including, the end
-/// fractal's raw bar; the start fractal's own point when none is beyond it.
-/// Inclusion can hide such a bar inside a merged NewBar.
+/// raw bar most beyond the start fractal's price on its side from the start
+/// fractal's middle NewBar up to, not including, the end fractal's raw bar.
+/// The start fractal's own point wins ties; among raw bars strictly beyond it,
+/// the earliest. Inclusion can hide such a bar inside a merged NewBar.
 fn true_start(
     bars: &[Arc<NewBar>],
     start_fractal: &Fractal,
     end_fractal: &Fractal,
     direction: Direction,
 ) -> Endpoint {
-    let side = direction.opposite();
     let from = bars.partition_point(|b| b.dt < start_fractal.dt);
-    let mut start = Endpoint::of(start_fractal);
-    for raw in bars[from..]
+    let raws = bars[from..]
         .iter()
         .flat_map(|b| &b.elements)
-        .take_while(|r| r.dt < end_fractal.dt)
-    {
+        .take_while(|r| r.dt < end_fractal.dt);
+    extreme_start(raws, start_fractal, direction)
+}
+
+fn extreme_start<'a>(
+    raws: impl Iterator<Item = &'a RawBar>,
+    start_fractal: &Fractal,
+    direction: Direction,
+) -> Endpoint {
+    let side = direction.opposite();
+    let mut start = Endpoint::of(start_fractal);
+    for raw in raws {
         let price = if side == Direction::Up {
             raw.high
         } else {
