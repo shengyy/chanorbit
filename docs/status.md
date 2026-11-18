@@ -28,4 +28,6 @@ Version 0.1.2, schemas `chanorbit.geometry/1`, `chanorbit.stages/2` and `chanorb
 - `stages` baselines are synthetic daily series only; no intraday or real-data stage case is committed.
 - `levels` baselines are synthetic apart from three transformed single-level cases.
 - Native execution on a Linux x86_64 host; only container emulation was run. Windows is not a target.
+- A finished stroke removed by the two-stroke reopening of *Extension* or *Append* ([strokes](structure-contract.md)). The check that the last stroke never returns to the stroke before it runs on the committed baselines only; a local 17-bar synthetic series (not committed) makes a finished down stroke disappear on the next input, and a local replay of 65,294 prefixes of 75 real series (not committed) changed a confirmed fractal pair on 25 inputs where 0.1.1 did not.
+- When the first retained NewBar merged several raw bars, retention keeps raw bars from that NewBar's time, not from its first raw bar, so MACD starts later than *Retention* states (same in 0.1.1).
 - Long series that form no stroke (quadratic time, see [architecture.md](architecture.md#data-flow)) have no timing test. Performance has no threshold or test; `cargo run --release --example bench` gives local readings only.
