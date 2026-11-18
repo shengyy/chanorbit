@@ -68,8 +68,29 @@ fn states_agree_with_the_last_close_and_zones_partition() {
                         kinds.insert(format!("retest_role/{r}"));
                     }
                     // `edge` is the exit side, whatever the element's direction.
-                    if (st["edge"] == "zg") != (st["direction"] == "向上") {
+                    let against = (st["edge"] == "zg") != (st["direction"] == "向上");
+                    if against {
                         kinds.insert(format!("{role}/against_exit_side"));
+                    }
+                    // `new_extreme` exists only toward the exit side; a
+                    // non-member is new exactly beyond `dd`/`gg`, and a new
+                    // member extreme is `dd`/`gg` itself.
+                    assert_eq!(st["new_extreme"].is_null(), against, "{st}");
+                    if let Some(new) = st["new_extreme"].as_bool() {
+                        let price = st["raw_extreme"]["price"].as_f64().unwrap();
+                        let (outer, beyond) = if st["edge"] == "zg" {
+                            let gg = z["gg"].as_f64().unwrap();
+                            (gg, price > gg)
+                        } else {
+                            let dd = z["dd"].as_f64().unwrap();
+                            (dd, price < dd)
+                        };
+                        if st["member"] == true {
+                            assert!(!new || price == outer, "{st}");
+                        } else {
+                            assert_eq!(new, beyond, "{st}");
+                        }
+                        kinds.insert(format!("{role}/new_extreme/{new}/member/{}", st["member"]));
                     }
                 }
                 if latest && kind == "departed" {
@@ -145,6 +166,8 @@ fn states_agree_with_the_last_close_and_zones_partition() {
         "latest/against_exit_side",
         "ended/against_exit_side",
         "ended/versus_edge/\"beyond\"",
+        "ended/new_extreme/true/member/true",
+        "latest/new_extreme/true/member/true",
         "retest_role/entry",
         "retest_role/member",
         "zones_reason/last_start_no_child_bar",
@@ -258,4 +281,98 @@ fn short_levels_are_missing_material_and_the_finest_has_no_child() {
     assert!(all[0]["child"].is_null());
     assert_eq!(all[0]["child_reason"], "missing_material");
     assert!(all[1].get("child").is_none() && all[1].get("child_reason").is_none());
+}
+
+/// One daily level from price pivots: legs of `bars` inputs each, linear in
+/// between, every bar 0.1 wide around its close.
+fn zigzag(pivots: &[(f64, usize)]) -> Value {
+    let mut prices = vec![pivots[0].0];
+    for w in pivots.windows(2) {
+        let ((a, _), (b, n)) = (w[0], w[1]);
+        // Each pivot exactly, so equal pivots give equal prices.
+        prices.extend((1..=n).map(|k| {
+            if k == n {
+                b
+            } else {
+                a + (b - a) * k as f64 / n as f64
+            }
+        }));
+    }
+    let start = chanorbit::contract::parse_dt("2026-01-05T15:00:00").unwrap();
+    let dt: Vec<String> = (0..prices.len())
+        .map(|i| {
+            (start + chrono::Duration::days(i as i64))
+                .format("%Y-%m-%dT%H:%M:%S")
+                .to_string()
+        })
+        .collect();
+    let column = |f: fn(f64) -> f64| prices.iter().map(|&p| f(p)).collect::<Vec<_>>();
+    json!({"levels": [{"name": "d", "dt": dt, "high": column(|p| p + 0.05),
+        "low": column(|p| p - 0.05), "close": prices, "vol": vec![100.0; prices.len()]}]})
+}
+
+#[test]
+fn new_extreme_is_strictly_beyond_every_other_member() {
+    // Entry 20 -> 10, members 10 -> 14 -> 11 -> 13.5: core [10.95, 13.55],
+    // first member low 9.95. Each case leaves downward, and mirrored upward.
+    let leg = |p: &[f64]| p.iter().map(|&x| (x, 6)).collect::<Vec<_>>();
+    let centre = [16.0, 20.0, 10.0, 14.0, 11.0, 13.5];
+    let cases = [
+        (
+            "member, new low",
+            leg(&[9.0, 10.5, 9.5]),
+            json!(4),
+            json!(true),
+        ),
+        (
+            "member, equal to an earlier member",
+            leg(&[10.0, 10.5, 10.2]),
+            json!(4),
+            json!(false),
+        ),
+        (
+            "member, above an earlier member",
+            leg(&[10.5, 10.8, 10.6]),
+            json!(4),
+            json!(false),
+        ),
+        (
+            "non-member, below dd",
+            leg(&[9.0]),
+            json!("unfinished"),
+            json!(true),
+        ),
+        (
+            "non-member, equal to dd",
+            leg(&[10.0]),
+            json!("unfinished"),
+            json!(false),
+        ),
+        // An up candidate whose last bar touches the core and closes below it.
+        (
+            "against the exit side",
+            vec![(10.5, 3), (10.92, 2)],
+            json!("unfinished"),
+            Value::Null,
+        ),
+    ];
+    for (name, tail, departure, want) in cases {
+        let pivots: Vec<(f64, usize)> = leg(&centre).into_iter().chain(tail).collect();
+        let mirrored: Vec<(f64, usize)> = pivots.iter().map(|&(p, n)| (30.0 - p, n)).collect();
+        for (side, pivots) in [("down", pivots), ("up", mirrored)] {
+            let v = answer(&zigzag(&pivots));
+            let centres = v["levels"][0]["centres"].as_array().unwrap();
+            assert_eq!(centres.len(), 1, "{name} ({side}): {v}");
+            let st = &centres[0]["state"];
+            assert_eq!(st["kind"], "departed", "{name} ({side}): {st}");
+            assert_eq!(
+                st["edge"],
+                if side == "down" { "zd" } else { "zg" },
+                "{name} ({side})"
+            );
+            assert_eq!(st["departure"], departure, "{name} ({side}): {st}");
+            assert_eq!(st["member"], departure.is_number(), "{name} ({side}): {st}");
+            assert_eq!(st["new_extreme"], want, "{name} ({side}): {st}");
+        }
+    }
 }
