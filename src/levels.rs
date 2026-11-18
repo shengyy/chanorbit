@@ -121,6 +121,9 @@ pub enum State {
         direction: Direction,
         edge: &'static str,
         raw_extreme: Option<Extreme>,
+        /// Toward the exit side only: the raw extreme strictly beyond every
+        /// other member's (`dd`/`gg` when the departure is not a member).
+        new_extreme: Option<bool>,
         member: bool,
         first_beyond_at: NaiveDateTime,
         retest: Option<Pos>,
@@ -694,16 +697,31 @@ impl Level {
             }
             _ => None,
         };
+        let toward_exit = x.direction == exit_direction;
+        // Against the exit side: the extreme on the exit side from the exit bar on.
+        let extreme = if toward_exit {
+            raw_extreme(raw, x.direction, x.start_at, x.end_at)
+        } else {
+            raw_extreme_from(raw, exit_direction, exit.dt, x.end_at)
+        };
+        // Beyond every member but the departure itself, at the endpoints the
+        // centre's `dd`/`gg` are taken from; an equal price is not new.
+        let others = (z.start - w0..z.end - w0)
+            .filter(|&i| Pos::Stroke(i) != x.pos)
+            .map(|i| &self.strokes[i]);
+        let new_extreme = extreme.filter(|_| toward_exit).map(|e| {
+            if above {
+                e.price > others.map(|s| s.high).fold(f64::NEG_INFINITY, f64::max)
+            } else {
+                e.price < others.map(|s| s.low).fold(f64::INFINITY, f64::min)
+            }
+        });
         State::Departed {
             departure: x.pos,
             direction: x.direction,
             edge: if above { "zg" } else { "zd" },
-            // Against the exit side: the extreme on the exit side from the exit bar on.
-            raw_extreme: if x.direction == exit_direction {
-                raw_extreme(raw, x.direction, x.start_at, x.end_at)
-            } else {
-                raw_extreme_from(raw, exit_direction, exit.dt, x.end_at)
-            },
+            raw_extreme: extreme,
+            new_extreme,
             member: matches!(x.pos, Pos::Stroke(p) if p + w0 < z.end),
             first_beyond_at: exit.dt,
             retest: retest.map(|r| r.pos),
