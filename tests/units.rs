@@ -164,7 +164,8 @@ fn non_adjacent_repeated_time_is_rejected() {
 
 /// A NewBar keeps at most 101 raw bars: the first 100 and the latest. The
 /// first element (and so a fractal's `confirmed_at`) is never displaced; a
-/// raw price owner in the 101st slot is, which the candidate reports.
+/// raw price owner in the 101st slot is, which endpoints and the candidate
+/// do not see, because they read the retained raw bars.
 #[test]
 fn newbar_element_cap() {
     let path = common::golden_files()
@@ -206,11 +207,10 @@ fn newbar_element_cap() {
         last.confirmed_at,
         top.elements[2].elements.first().map(|b| b.dt)
     );
-    assert_eq!(g.candidate_stroke.state, "unavailable");
-    assert_eq!(
-        g.candidate_stroke.reason.as_deref(),
-        Some("anchor_price_source_missing")
-    );
+    // Endpoints and the candidate read retained raw bars, not NewBar elements.
+    assert_eq!(c.strokes().last().unwrap().end_at(), top.dt);
+    assert_eq!(g.candidate_stroke.state, "available");
+    assert_eq!(g.candidate_stroke.anchor_price_at, Some(top.dt));
 }
 
 #[test]
