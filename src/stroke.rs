@@ -1,4 +1,4 @@
-//! Strokes (笔), their endpoints and the single-stroke search over unfinished NewBars.
+//! Strokes (笔), their raw endpoints and the single-stroke search over unfinished NewBars.
 use crate::bar::{NewBar, RawBar};
 use crate::fractal::{Fractal, Mark, scan_fractals};
 use chrono::NaiveDateTime;
@@ -44,10 +44,11 @@ impl Endpoint {
 pub struct Stroke {
     pub start_fractal: Fractal,
     pub end_fractal: Fractal,
-    /// The start fractal's point, or the more extreme raw bar after it (see
-    /// [`find_stroke`]); the previous stroke ends here too.
+    /// The most extreme start-side raw price of its raw span (see
+    /// [`Stroke::place`]); the previous stroke ends here too.
     pub start: Endpoint,
-    /// The end fractal's point.
+    /// The most extreme end-side raw price from its start up to its end
+    /// fractal's bar, until the next stroke starts and it ends there.
     pub end: Endpoint,
     /// Fractals whose time lies within the stroke's NewBar span.
     pub fractals: Vec<Fractal>,
@@ -65,12 +66,12 @@ impl Stroke {
         self.end.at
     }
 
-    /// The higher endpoint price; the path may exceed it only on the end side.
+    /// The higher endpoint price.
     pub fn high(&self) -> f64 {
         self.start.price.max(self.end.price)
     }
 
-    /// The lower endpoint price; the path may exceed it only on the end side.
+    /// The lower endpoint price.
     pub fn low(&self) -> f64 {
         self.start.price.min(self.end.price)
     }
@@ -97,42 +98,71 @@ impl Stroke {
             .collect()
     }
 
-    /// The start once this stroke ends at `until`: as found, but over its own
-    /// raw bars up to its end fractal's and then `later`'s up to `until` (the
-    /// end fractal's own bar included). `later` starts at the end fractal's
-    /// first NewBar.
-    pub fn restart(&self, until: NaiveDateTime, later: &[Arc<NewBar>]) -> Endpoint {
-        let from = self
-            .newbars
-            .partition_point(|b| b.dt < self.start_fractal.dt);
-        let end = self.end_fractal.dt;
-        let own = self.newbars[from..]
-            .iter()
-            .flat_map(|b| &b.elements)
-            .take_while(|r| r.dt < end);
-        let after = later
-            .iter()
-            .flat_map(|b| &b.elements)
-            .filter(|r| r.dt >= end && r.dt < until);
-        extreme_start(own.chain(after), &self.start_fractal, self.direction)
+    /// The start over the retained raw bars `raws` once this stroke follows a
+    /// stroke starting at `after`: the most extreme start-side raw price after
+    /// `after` (without a stroke before, from this stroke's first raw bar) up
+    /// to, not including, the end fractal's bar.
+    pub fn start_after(&self, raws: &[RawBar], after: Option<NaiveDateTime>) -> Endpoint {
+        let from = match after {
+            Some(after) => raws.partition_point(|r| r.dt <= after),
+            None => {
+                let first = self.newbars[0].elements[0].dt;
+                raws.partition_point(|r| r.dt < first)
+            }
+        };
+        let to = raws.partition_point(|r| r.dt < self.end_fractal.dt);
+        let side = self.direction.opposite();
+        extreme(&raws[from..to.max(from)], side, Some(self.start_fractal.dt))
+            .unwrap_or(Endpoint::of(&self.start_fractal))
     }
 
-    /// Whether this stroke can end at a raw bar at `until`: no raw bar in
-    /// `later` from its end fractal's up to `until` is beyond its start.
-    /// `later` starts at the end fractal's first NewBar.
-    pub fn holds_end(&self, until: NaiveDateTime, later: &[Arc<NewBar>]) -> bool {
+    /// Place both endpoints over `raws` (see [`Stroke::start_after`]); the end
+    /// is the most extreme end-side raw price after the start up to the end
+    /// fractal's bar.
+    pub fn place(&mut self, raws: &[RawBar], after: Option<NaiveDateTime>) {
+        self.start = self.start_after(raws, after);
+        self.end = self.end_from(raws, self.start);
+    }
+
+    /// The end once the stroke starts at `start`.
+    pub fn end_from(&self, raws: &[RawBar], start: Endpoint) -> Endpoint {
+        let from = raws.partition_point(|r| r.dt <= start.at);
+        let to = raws.partition_point(|r| r.dt <= self.end_fractal.dt);
+        extreme(
+            &raws[from..to.max(from)],
+            self.direction,
+            Some(self.end_fractal.dt),
+        )
+        .unwrap_or(Endpoint::of(&self.end_fractal))
+    }
+
+    /// The start once this stroke ends at `until`: the most extreme start-side
+    /// raw price from its start up to, not including, `until`.
+    pub fn restart(&self, until: NaiveDateTime, raws: &[RawBar]) -> Endpoint {
+        let from = raws.partition_point(|r| r.dt < self.start.at);
+        let to = raws.partition_point(|r| r.dt < until);
+        extreme(
+            &raws[from..to.max(from)],
+            self.direction.opposite(),
+            Some(self.start.at),
+        )
+        .unwrap_or(self.start)
+    }
+
+    /// Whether this stroke can end at a raw bar at `until`: no raw bar after
+    /// its start and before `until` is beyond its start. With `next_end`, the
+    /// price where the next stroke from `until` ends, the bar at `until` may
+    /// reach beyond the start only when it does not also reach beyond
+    /// `next_end`: no order of its high and low would give both strokes their
+    /// extremes (see *End bar* in the structure contract).
+    pub fn holds_end(&self, until: NaiveDateTime, next_end: Option<f64>, raws: &[RawBar]) -> bool {
         let side = self.direction.opposite();
-        !later
-            .iter()
-            .flat_map(|b| &b.elements)
-            .filter(|r| r.dt >= self.end_fractal.dt && r.dt < until)
-            .any(|r| {
-                beyond(
-                    side,
-                    if side == Direction::Up { r.high } else { r.low },
-                    self.start.price,
-                )
-            })
+        let from = raws.partition_point(|r| r.dt <= self.start.at);
+        let breaks = |r: &RawBar| beyond(side, price(r, side), self.start.price);
+        let mut path = raws[from..].iter().take_while(|r| r.dt <= until);
+        !path.any(|r| {
+            breaks(r) && (r.dt < until || next_end.is_some_and(|e| beyond(side, price(r, side), e)))
+        })
     }
 }
 
@@ -144,47 +174,40 @@ pub fn beyond(direction: Direction, price: f64, than: f64) -> bool {
     }
 }
 
-/// The start of a stroke identified by `start_fractal` and `end_fractal`: the
-/// raw bar most beyond the start fractal's price on its side from the start
-/// fractal's middle NewBar up to, not including, the end fractal's raw bar.
-/// The start fractal's own point wins ties; among raw bars strictly beyond it,
-/// the earliest. Inclusion can hide such a bar inside a merged NewBar.
-fn true_start(
-    bars: &[Arc<NewBar>],
-    start_fractal: &Fractal,
-    end_fractal: &Fractal,
-    direction: Direction,
-) -> Endpoint {
-    let from = bars.partition_point(|b| b.dt < start_fractal.dt);
-    let raws = bars[from..]
-        .iter()
-        .flat_map(|b| &b.elements)
-        .take_while(|r| r.dt < end_fractal.dt);
-    extreme_start(raws, start_fractal, direction)
+/// The raw bar's price on `side`: its high for up, its low for down.
+pub fn price(raw: &RawBar, side: Direction) -> f64 {
+    match side {
+        Direction::Up => raw.high,
+        Direction::Down => raw.low,
+    }
 }
 
-fn extreme_start<'a>(
-    raws: impl Iterator<Item = &'a RawBar>,
-    start_fractal: &Fractal,
-    direction: Direction,
-) -> Endpoint {
-    let side = direction.opposite();
-    let mut start = Endpoint::of(start_fractal);
+/// The most extreme price on `side` among `raws`: the raw bar at `prefer`
+/// when it holds that price, otherwise the earliest that does. `None` when
+/// `raws` is empty.
+pub fn extreme(
+    raws: &[RawBar],
+    side: Direction,
+    prefer: Option<NaiveDateTime>,
+) -> Option<Endpoint> {
+    let mut best: Option<Endpoint> = None;
     for raw in raws {
-        let price = if side == Direction::Up {
-            raw.high
-        } else {
-            raw.low
-        };
-        if beyond(side, price, start.price) {
-            start = Endpoint { at: raw.dt, price };
+        let p = price(raw, side);
+        let wins = best
+            .is_none_or(|b| beyond(side, p, b.price) || (p == b.price && Some(raw.dt) == prefer));
+        if wins {
+            best = Some(Endpoint {
+                at: raw.dt,
+                price: p,
+            });
         }
     }
-    start
+    best
 }
 
-/// Find the first stroke in `bars`. Returns the stroke and the index where the
-/// remaining unfinished bars start (0 when no stroke is formed).
+/// Find the first stroke in `bars`. Returns the stroke, its endpoints still at
+/// its fractals until [`Stroke::place`], and the index where the remaining
+/// unfinished bars start (0 when no stroke is formed).
 pub fn find_stroke(bars: &[Arc<NewBar>], min_stroke_bars: usize) -> (Option<Stroke>, usize) {
     let fractals = scan_fractals(bars);
     if fractals.len() < 2 {
@@ -232,7 +255,7 @@ pub fn find_stroke(bars: &[Arc<NewBar>], min_stroke_bars: usize) -> (Option<Stro
         return (None, 0);
     }
     let stroke = Stroke {
-        start: true_start(bars, start_fractal, end_fractal, direction),
+        start: Endpoint::of(start_fractal),
         end: Endpoint::of(end_fractal),
         start_fractal: start_fractal.clone(),
         end_fractal: end_fractal.clone(),

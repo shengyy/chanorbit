@@ -152,7 +152,6 @@ fn states_agree_with_the_last_close_and_zones_partition() {
         "zones_reason/unfinished_extreme_no_child_bar",
         "forces/two_strokes",
         "child_starts_after/\"last_start\"",
-        "latest/departure/tail",
     ] {
         assert!(kinds.contains(want), "no baseline covers {want}");
     }

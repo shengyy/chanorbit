@@ -1,15 +1,20 @@
-//! Stroke endpoints: a start is the most extreme raw price of its stroke, an
-//! end is moved to a more extreme fractal before any reverse stroke forms, and
-//! a stroke that extends stays. Synthetic shapes of the two cases the
-//! definition was revised for, and the same rules after every input of every
-//! baseline.
+//! Stroke endpoints: both ends are the most extreme raw prices of the stroke's
+//! raw span, an end is moved to a more extreme fractal before any reverse
+//! stroke forms, a stroke that extends stays, and the candidate ends at the
+//! most extreme raw price after the last stroke. Synthetic shapes of the cases
+//! the definition was revised for, and the same rules after every input of
+//! every baseline.
 mod common;
 
 use chanorbit::candidate::candidate_stroke;
 use chanorbit::{Analyzer, Config, Direction, Mark, RawBar, Stroke, geometry};
 
+fn input_start() -> chrono::NaiveDateTime {
+    chanorbit::contract::parse_dt("2026-01-05T15:00:00").unwrap()
+}
+
 fn bars(ranges: &[(f64, f64)]) -> Vec<RawBar> {
-    let start = chanorbit::contract::parse_dt("2026-01-05T15:00:00").unwrap();
+    let start = input_start();
     ranges
         .iter()
         .enumerate()
@@ -25,7 +30,7 @@ fn bars(ranges: &[(f64, f64)]) -> Vec<RawBar> {
 
 /// Each stroke as direction, start price and input index, end price and index.
 fn ends(c: &Analyzer) -> Vec<(Direction, f64, usize, f64, usize)> {
-    let start = chanorbit::contract::parse_dt("2026-01-05T15:00:00").unwrap();
+    let start = input_start();
     let day = |dt: chrono::NaiveDateTime| (dt - start).num_days() as usize;
     c.strokes()
         .iter()
@@ -46,6 +51,38 @@ fn starts_are_extreme(c: &Analyzer, s: &Stroke) -> bool {
             Direction::Up => b.low >= s.start.price,
             Direction::Down => b.high <= s.start.price,
         })
+}
+
+/// No raw bar after a stroke's start up to its end is beyond its end.
+fn ends_are_extreme(c: &Analyzer, s: &Stroke) -> bool {
+    c.raw_bars()
+        .iter()
+        .filter(|b| b.dt > s.start_at() && b.dt <= s.end_at())
+        .all(|b| match s.direction {
+            Direction::Up => b.high <= s.end.price,
+            Direction::Down => b.low >= s.end.price,
+        })
+}
+
+/// No raw bar after the last stroke's end is beyond it unless the candidate
+/// extends it, and none after the candidate's end is beyond that end.
+fn candidate_is_extreme(c: &Analyzer) -> bool {
+    let (Some(s), k) = (c.strokes().last(), candidate_stroke(c)) else {
+        return true;
+    };
+    let past = |dt, up: bool, price: f64| {
+        c.raw_bars()
+            .iter()
+            .any(|b| b.dt > dt && if up { b.high > price } else { b.low < price })
+    };
+    let up = s.direction == Direction::Up;
+    let extension = k.kind.as_deref() == Some("extension");
+    let end_stands = extension || !past(s.end_at(), up, s.end.price);
+    let candidate_stands = match (k.end_price_at, k.end_price, k.direction) {
+        (Some(at), Some(price), Some(d)) => !past(at, d == Direction::Up, price),
+        _ => true,
+    };
+    end_stands && candidate_stands
 }
 
 /// No fractal of the last stroke's end mark after its end lies beyond it.
@@ -215,6 +252,94 @@ fn a_moved_end_restarts_the_stroke_across_its_end_bar() {
     assert_eq!(geometry(&all), geometry(&c));
 }
 
+/// An outside bar merged upward hides a low in the bottom fractal's first
+/// NewBar, or in the NewBar before it; the low ends the stroke either way.
+#[test]
+fn an_extreme_hidden_before_the_end_fractal_ends_the_stroke() {
+    #[rustfmt::skip]
+    let fall = [
+        (10.2, 10.0), (10.5, 10.2), (10.8, 10.5), (11.1, 10.8), (11.4, 11.1), (11.7, 11.4),
+        (12.0, 11.7), // 6: top
+        (11.8, 11.5), (11.5, 11.2), (11.2, 10.9), (10.9, 10.6), (10.6, 10.3),
+        (10.4, 10.2), (10.5, 10.3),
+        (10.9, 9.9), // 14: outside bar, merged upward into [10.9, 10.3]
+    ];
+    #[rustfmt::skip]
+    let rise = [(10.6, 10.2), (10.9, 10.5), (11.2, 10.8), (11.5, 11.1), (11.8, 11.4), (12.1, 11.7), (11.8, 11.4), (11.5, 11.1)];
+    let (down, up) = (Direction::Down, Direction::Up);
+    for (between, fractal, top) in [(&[][..], 15, 21), (&[(10.7, 10.25)][..], 16, 22)] {
+        let input: Vec<_> = fall
+            .iter()
+            .chain(between)
+            .chain(&[(10.4, 10.0)])
+            .chain(&rise)
+            .copied()
+            .collect();
+        let c = Analyzer::from_bars(bars(&input), Config::default());
+        assert_eq!(
+            ends(&c),
+            [(down, 12.0, 6, 9.9, 14), (up, 9.9, 14, 12.1, top)]
+        );
+        assert_eq!(c.strokes()[1].start_fractal.price, 10.0);
+        let day = |s: &Stroke| (s.start_fractal.dt - input_start()).num_days();
+        assert_eq!(day(&c.strokes()[1]), fractal);
+    }
+}
+
+/// An outside bar merged downward hides the high of the rise after the last
+/// stroke; the candidate ends there.
+#[test]
+fn a_candidate_ends_at_an_extreme_hidden_by_inclusion() {
+    #[rustfmt::skip]
+    let input = bars(&[
+        (10.2, 10.0), (10.5, 10.2), (10.8, 10.5), (11.1, 10.8), (11.4, 11.1), (11.7, 11.4),
+        (12.0, 11.7), (11.8, 11.5), (11.5, 11.2), (11.2, 10.9), (10.9, 10.6), (10.6, 10.3),
+        (10.3, 10.0), // 12: bottom
+        (10.6, 10.2), (10.9, 10.5), (10.8, 10.4),
+        (11.0, 10.1), // 16: outside bar, merged downward into [10.8, 10.1]
+    ]);
+    let c = Analyzer::from_bars(input.clone(), Config::default());
+    assert_eq!(ends(&c), [(Direction::Down, 12.0, 6, 10.0, 12)]);
+    let candidate = candidate_stroke(&c);
+    assert_eq!(candidate.kind.as_deref(), Some("reverse"));
+    assert_eq!(
+        (candidate.end_price, candidate.end_price_at),
+        (Some(11.0), Some(input[16].dt))
+    );
+}
+
+/// A wide bar ends a rebound and reaches below both the rebound's start and
+/// the next stroke's end: no order of its high and low gives both strokes
+/// their extremes, so the decline before them ends at its low.
+#[test]
+fn a_bar_beyond_both_ends_cannot_end_the_stroke() {
+    #[rustfmt::skip]
+    let input = bars(&[
+        (10.2, 10.0), (10.5, 10.2), (10.8, 10.5), (11.1, 10.8), (11.4, 11.1), (11.7, 11.4),
+        (12.0, 11.7), (11.8, 11.5), (11.5, 11.2), (11.2, 10.9), (10.9, 10.6), (10.6, 10.3),
+        (10.3, 10.0), // 12: bottom
+        (10.5, 10.2), (10.7, 10.4), (10.9, 10.6), (11.1, 10.8),
+        (11.3, 11.0), // 17: top
+        (11.1, 10.8), (10.9, 10.6), (10.7, 10.4), (10.5, 10.2),
+        (10.35, 10.15), // 22: bottom above 10.0
+        (10.5, 10.3), (10.6, 10.4),
+        (11.5, 9.8), // 25: merged upward, its low hidden
+        (10.9, 10.3),
+        (10.6, 9.95), // 27: bottom between 9.8 and 10.0
+        (10.8, 10.2), (11.0, 10.5), (11.3, 10.8), (11.6, 11.1), (11.9, 11.4),
+        (12.2, 11.7), // 33: top
+        (11.9, 11.4), (11.6, 11.1),
+    ]);
+    let c = Analyzer::from_bars(input, Config::default());
+    assert_eq!(
+        ends(&c),
+        [
+            (Direction::Down, 12.0, 6, 9.8, 25),
+            (Direction::Up, 9.8, 25, 12.2, 33)
+        ]
+    );
+}
+
 /// Revisions undo extensions, reopened strokes and moved endpoints exactly.
 #[test]
 fn revisions_undo_endpoint_changes() {
@@ -246,10 +371,11 @@ fn revisions_undo_endpoint_changes() {
     assert_eq!(all.raw_bars(), clean.raw_bars());
 }
 
-/// After every input of every baseline: starts are extreme, the last end is
-/// extreme among the unfinished fractals, and the last stroke never returns
-/// to the stroke before it (an extending stroke is kept, not withdrawn). The
-/// first retained stroke is checked too.
+/// After every input of every baseline: starts and ends are extreme over the
+/// stroke's raw span, the last end is extreme among the unfinished fractals,
+/// the candidate leaves no raw price beyond the last end or its own, and the
+/// last stroke never returns to the stroke before it (an extending stroke is
+/// kept, not withdrawn). The first retained stroke is checked too.
 #[test]
 fn baselines_keep_endpoints_extreme_after_every_input() {
     let mut checked = 0;
@@ -265,8 +391,10 @@ fn baselines_keep_endpoints_extreme_after_every_input() {
             }
             for s in c.strokes() {
                 assert!(starts_are_extreme(&c, s), "{name} input {i}: {s:?}");
+                assert!(ends_are_extreme(&c, s), "{name} input {i}: {s:?}");
             }
             assert!(end_is_extreme(&c), "{name} input {i}");
+            assert!(candidate_is_extreme(&c), "{name} input {i}");
             let last = c.strokes().last().cloned();
             if let (Some(u), Some(d)) = (&previous, &last) {
                 let returned = d.direction != u.direction

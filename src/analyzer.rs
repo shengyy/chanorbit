@@ -2,8 +2,7 @@
 //! same-dt tail revision. Batch construction is the same per-bar loop.
 use crate::bar::{NewBar, RawBar, merge_inclusion};
 use crate::fractal::{Fractal, scan_fractals};
-use crate::stroke::{Direction, Stroke, beyond, find_stroke};
-use chrono::NaiveDateTime;
+use crate::stroke::{Direction, Endpoint, Stroke, beyond, extreme, find_stroke};
 use std::sync::Arc;
 
 /// Stroke parameters. Defaults: 50 strokes, 6 NewBars.
@@ -129,7 +128,7 @@ impl Analyzer {
             self.tail.pruned_strokes = self.strokes.drain(..excess).collect();
         }
         if let Some(first) = self.strokes.first() {
-            let start_at = first.start_fractal.elements[0].dt;
+            let start_at = first.start.at.min(first.start_fractal.elements[0].dt);
             let keep_from = self.raw_bars.partition_point(|b| b.dt < start_at);
             self.tail.pruned_raw = self.raw_bars.drain(..keep_from).collect();
         }
@@ -189,30 +188,36 @@ impl Analyzer {
             .cloned()
             .collect();
         let (stroke, rest) = find_stroke(&bars, self.config.min_stroke_bars);
-        if let Some(stroke) = stroke {
+        if let Some(mut stroke) = stroke {
+            stroke.place(&self.raw_bars, None);
             self.strokes.push(stroke);
         }
         self.pending_bars = bars[rest..].to_vec();
     }
 
-    /// While an unfinished NewBar is beyond the last stroke's end, the stroke
-    /// is searched again. If a raw bar after its end is already beyond its
-    /// start, it cannot extend: it is reopened with the stroke before it, which
-    /// is searched again from its start and replaces both once it ends further
-    /// beyond. Otherwise the last stroke is searched again from its own start
-    /// and replaced by a stroke ending further beyond; else it stays.
+    /// While a raw bar after the last stroke's end is beyond it, the stroke is
+    /// searched again. If it does not hold its end up to the most extreme such
+    /// bar, it cannot extend across that price: it is reopened with the stroke
+    /// before it, which is searched again from its start and replaces both
+    /// once its end fractal lies beyond that stroke's. Otherwise the last
+    /// stroke is searched again from its own start and replaced by a stroke
+    /// whose end fractal lies further beyond; else it stays.
     fn extend_last_stroke(&mut self) {
-        if !self.last_stroke_extends() {
+        let Some(to) = self.extension() else {
             return;
-        }
+        };
         let min = self.config.min_stroke_bars;
         let n = self.strokes.len();
         let last = &self.strokes[n - 1];
-        if n >= 2 && !last.holds_end(NaiveDateTime::MAX, &self.pending_bars) {
+        if n >= 2 && !last.holds_end(to.at, None, &self.raw_bars) {
             let before = &self.strokes[n - 2];
             let window = before.reopen(&last.reopen(&self.pending_bars));
             if let (Some(stroke), _) = find_stroke(&window, min)
-                && beyond(before.direction, stroke.end.price, before.end_fractal.price)
+                && beyond(
+                    before.direction,
+                    stroke.end_fractal.price,
+                    before.end_fractal.price,
+                )
             {
                 self.pop_stroke();
                 self.pop_stroke();
@@ -222,7 +227,11 @@ impl Analyzer {
         }
         let window = last.reopen(&self.pending_bars);
         if let (Some(stroke), _) = find_stroke(&window, min)
-            && beyond(last.direction, stroke.end.price, last.end.price)
+            && beyond(
+                last.direction,
+                stroke.end_fractal.price,
+                last.end_fractal.price,
+            )
         {
             self.pop_stroke();
             self.settle(window);
@@ -230,12 +239,13 @@ impl Analyzer {
     }
 
     /// Append the stroke found in `window`, which starts at the last stroke's
-    /// end fractal, and keep the rest unfinished; the last stroke then ends
-    /// where the new one starts. When that would carry the last stroke across a
-    /// raw price beyond its own start, the last two strokes are reopened and the
-    /// stroke is searched again from the start of the one before them, as often
-    /// as needed. A search that does not reach the new stroke's end, or no
-    /// stroke before them, keeps the strokes and links the stroke as found;
+    /// end fractal, and keep the rest unfinished; its endpoints are placed
+    /// after the last stroke's start and the last stroke then ends where the
+    /// new one starts. When that would carry the last stroke across a raw
+    /// price beyond its own start, the last two strokes are reopened and the
+    /// stroke is searched again from the start of the one before them, as
+    /// often as needed. A search that does not reach the new stroke's end, or
+    /// no stroke before them, keeps the strokes and links the stroke as found;
     /// [`Analyzer::restart_back`] then moves the earlier starts.
     fn settle(&mut self, window: Vec<Arc<NewBar>>) {
         let min = self.config.min_stroke_bars;
@@ -249,11 +259,17 @@ impl Analyzer {
         let mut kept = self.strokes.len();
         loop {
             let (stroke, bars) = merged.as_ref().map_or((&found, &window), |m| (&m.0, &m.1));
-            if kept == 0 || self.strokes[kept - 1].holds_end(stroke.start.at, bars) {
+            if kept == 0 {
+                break;
+            }
+            let previous = &self.strokes[kept - 1];
+            let start = stroke.start_after(&self.raw_bars, Some(previous.start.at));
+            let end = stroke.end_from(&self.raw_bars, start);
+            if previous.holds_end(start.at, Some(end.price), &self.raw_bars) {
                 break;
             }
             let reopened = (kept >= 2).then(|| {
-                let later = self.strokes[kept - 1].reopen(bars);
+                let later = previous.reopen(bars);
                 self.strokes[kept - 2].reopen(&later)
             });
             match reopened.map(|bars| (find_stroke(&bars, min), bars)) {
@@ -268,31 +284,31 @@ impl Analyzer {
                 }
             }
         }
-        let (stroke, bars, rest) = merged.unwrap_or((found, window, found_rest));
+        let (mut stroke, bars, rest) = merged.unwrap_or((found, window, found_rest));
         self.revise(kept.saturating_sub(1));
         self.strokes.truncate(kept);
+        stroke.place(&self.raw_bars, self.strokes.last().map(|s| s.start.at));
         if let Some(last) = self.strokes.last_mut() {
             last.end = stroke.start;
         }
         self.strokes.push(stroke);
         self.pending_bars = bars[rest..].to_vec();
-        self.restart_back(bars);
+        self.restart_back();
     }
 
     /// After the last stroke was linked: while the stroke before it would then
     /// span a raw price beyond its own start, that stroke starts again at the
     /// most extreme start-side price up to its new end, and the stroke before
-    /// it ends there in turn. `later` is the last stroke's window.
-    fn restart_back(&mut self, mut later: Vec<Arc<NewBar>>) {
+    /// it ends there in turn.
+    fn restart_back(&mut self) {
         let mut i = self.strokes.len() - 1;
         while i > 0 {
             let until = self.strokes[i].start.at;
             let previous = &self.strokes[i - 1];
-            if previous.holds_end(until, &later) {
+            if previous.holds_end(until, None, &self.raw_bars) {
                 return;
             }
-            let start = previous.restart(until, &later);
-            later = previous.newbars.clone();
+            let start = previous.restart(until, &self.raw_bars);
             self.revise((i - 1).saturating_sub(1));
             self.strokes[i - 1].start = start;
             if i >= 2 {
@@ -330,16 +346,31 @@ impl Analyzer {
         (!self.pending_fractals().is_empty()).then(|| last.direction.opposite())
     }
 
-    /// Whether some unfinished NewBar is beyond the last stroke's end side.
+    /// Whether some raw bar after the last stroke's end is beyond it.
     pub fn last_stroke_extends(&self) -> bool {
-        self.strokes.last().is_some_and(|stroke| {
-            self.pending_bars.iter().any(|b| {
-                let boundary = match stroke.direction {
-                    Direction::Up => b.high,
-                    Direction::Down => b.low,
-                };
-                beyond(stroke.direction, boundary, stroke.end.price)
-            })
-        })
+        self.extension().is_some()
+    }
+
+    /// The most extreme raw price after the last stroke's end and beyond it,
+    /// or `None` (ties: see [`Analyzer::after_end`]).
+    pub fn extension(&self) -> Option<Endpoint> {
+        let stroke = self.strokes.last()?;
+        self.after_end(stroke.direction)
+            .filter(|x| beyond(stroke.direction, x.price, stroke.end.price))
+    }
+
+    /// The most extreme raw price on `side` after the last stroke's end. On
+    /// ties the raw bar at the time of the first unfinished NewBar with that
+    /// boundary wins (where a later fractal would put it), else the earliest.
+    pub fn after_end(&self, side: Direction) -> Option<Endpoint> {
+        let end = self.strokes.last()?.end.at;
+        let raws = &self.raw_bars[self.raw_bars.partition_point(|b| b.dt <= end)..];
+        let x = extreme(raws, side, None)?;
+        let at = self
+            .pending_bars
+            .iter()
+            .find(|b| b.dt > end && (if side == Direction::Up { b.high } else { b.low }) == x.price)
+            .map(|b| b.dt);
+        extreme(raws, side, at)
     }
 }
