@@ -1,7 +1,7 @@
 //! Same-direction comparisons of a level's segments
 //! (`docs/structure-contract.md#comparisons`).
 use crate::levels::{Level, Pos, Seg, State};
-use crate::power::{Span, interval_power};
+use crate::power::interval_power;
 use crate::stroke::Direction;
 use chrono::NaiveDateTime;
 use serde::Serialize;
@@ -48,14 +48,7 @@ impl Level {
     fn metrics(&self, s: &Seg) -> [Option<f64>; 4] {
         let power = match s.pos {
             Pos::Stroke(k) => self.strokes[k].power.clone(),
-            Pos::Extension => interval_power(
-                &self.analyzer,
-                &self.macd,
-                Span::Extension,
-                s.start_at,
-                s.end_at,
-            ),
-            _ => interval_power(&self.analyzer, &self.macd, Span::Turn, s.start_at, s.end_at),
+            _ => interval_power(&self.analyzer, &self.macd, s.start_at, s.end_at),
         };
         let area = if s.direction == Direction::Up {
             power.macd.positive_area

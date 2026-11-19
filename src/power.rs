@@ -1,4 +1,4 @@
-//! Raw-interval power over a stroke's or piece's bars and the retained MACD view.
+//! Raw-interval power over `(start_at, end_at]` and the retained MACD view.
 use crate::analyzer::Analyzer;
 use crate::macd::{LOOKBACK, MacdSeries};
 use crate::stroke::Stroke;
@@ -24,46 +24,25 @@ pub struct PowerMacd {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Power {
-    /// Retained raw bars in the interval (see [`Span`]).
+    /// Retained raw bars with `start_at < dt <= end_at`.
     pub sample_count: usize,
     pub mean_volume: Option<f64>,
     pub macd: PowerMacd,
 }
 
-/// Whether an interval's start bar is one of its rows.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Span {
-    /// `start ≤ dt ≤ end`: a stroke, or a piece starting where price turned.
-    /// The bar holding the turn opens it, as it opens the stroke it would become.
-    Turn,
-    /// `start < dt ≤ end`: an extension, the bars after the end it extends.
-    Extension,
-}
-
-impl Span {
-    fn holds(self, dt: NaiveDateTime, start: NaiveDateTime, end: NaiveDateTime) -> bool {
-        dt <= end
-            && match self {
-                Span::Turn => dt >= start,
-                Span::Extension => dt > start,
-            }
-    }
-}
-
-/// Power over the retained raw bars of `span` from `start` to `end`. Missing
-/// endpoints or non-increasing times mean `missing_coverage`; any non-finite
-/// close up to `end` means `non_finite`; unready rows before [`LOOKBACK`] mean
-/// `warmup`. Unavailable areas are `None`, never 0.
+/// Power over retained raw bars with `start < dt <= end`. Missing endpoints or
+/// non-increasing times mean `missing_coverage`; any non-finite close up to
+/// `end` means `non_finite`; unready rows before [`LOOKBACK`] mean `warmup`.
+/// Unavailable areas are `None`, never 0.
 pub fn interval_power(
     c: &Analyzer,
     s: &MacdSeries,
-    span: Span,
     start: NaiveDateTime,
     end: NaiveDateTime,
 ) -> Power {
     let raw = c.raw_bars();
     let rows: Vec<usize> = (0..raw.len())
-        .filter(|&i| span.holds(raw[i].dt, start, end))
+        .filter(|&i| raw[i].dt > start && raw[i].dt <= end)
         .collect();
     let at = |dt| raw.iter().position(|b| b.dt == dt);
     let value =
@@ -144,17 +123,16 @@ pub fn interval_power(
     }
 }
 
-/// Stroke power over `[start_at, end_at]`; a raw bar the stroke snapshot holds
-/// there that is no longer retained makes areas and the mean volume unavailable.
+/// Stroke power; a raw bar the stroke snapshot holds inside `(start_at, end_at]` that
+/// is no longer retained makes areas and the mean volume unavailable.
 pub fn stroke_power(c: &Analyzer, s: &MacdSeries, stroke: &Stroke) -> Power {
-    let (start, end) = (stroke.start_at(), stroke.end_at());
-    let mut power = interval_power(c, s, Span::Turn, start, end);
+    let mut power = interval_power(c, s, stroke.start_at(), stroke.end_at());
     let raw = c.raw_bars();
     let missing = stroke
         .newbars
         .iter()
         .flat_map(|b| &b.elements)
-        .filter(|b| Span::Turn.holds(b.dt, start, end))
+        .filter(|b| b.dt > stroke.start_at() && b.dt <= stroke.end_at())
         .any(|b| raw.binary_search_by_key(&b.dt, |r| r.dt).is_err());
     if missing {
         power.macd.status = "unavailable".into();

@@ -5,7 +5,7 @@ use crate::candidate::{CandidateStroke, candidate_stroke};
 use crate::centre::canonical_centres;
 use crate::fractal::{Fractal, Mark};
 use crate::macd::retained_macd;
-use crate::power::{MacdFacts, Power, Span, interval_power, stroke_power};
+use crate::power::{MacdFacts, Power, interval_power, stroke_power};
 use crate::stroke::Direction;
 use chrono::NaiveDateTime;
 use serde::{Deserialize, Serialize};
@@ -87,10 +87,9 @@ pub struct Geometry {
     pub latest_centre: Option<usize>,
     pub centre_relation: Option<CentreRelation>,
     pub candidate_stroke: CandidateStroke,
-    /// From `anchor_at` to the last input of an available candidate, the
-    /// anchor bar included for a reverse candidate ([`Span`]).
+    /// Interval `(anchor_at, last input dt]` of an available candidate.
     pub candidate_power: Option<Power>,
-    /// From `anchor_at` to `end_price_at`, the same way.
+    /// Interval `(anchor_at, end_price_at]` of an available candidate.
     pub candidate_endpoint_power: Option<Power>,
     pub macd: MacdFacts,
 }
@@ -167,17 +166,12 @@ pub fn geometry(c: &Analyzer) -> Geometry {
         .map(FractalFact::from)
         .collect();
     let candidate = candidate_stroke(c);
-    let span = if candidate.kind.as_deref() == Some("reverse") {
-        Span::Turn
-    } else {
-        Span::Extension
-    };
     let window = |end: Option<NaiveDateTime>| {
         if candidate.state == "available" {
             candidate
                 .anchor_at
                 .zip(end)
-                .map(|(s, e)| interval_power(c, &macd, span, s, e))
+                .map(|(s, e)| interval_power(c, &macd, s, e))
         } else {
             None
         }
