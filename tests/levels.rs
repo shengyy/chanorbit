@@ -348,10 +348,11 @@ fn new_extreme_is_strictly_beyond_every_other_member() {
             json!("unfinished"),
             json!(false),
         ),
-        // An up candidate whose last bar touches the core and closes below it.
+        // An up candidate whose last bar touches the core and closes below it;
+        // the down stroke before it has three raw bars between its extremes.
         (
             "against the exit side",
-            vec![(10.5, 3), (10.92, 2)],
+            vec![(10.5, 4), (10.92, 2)],
             json!("unfinished"),
             Value::Null,
         ),
@@ -373,6 +374,50 @@ fn new_extreme_is_strictly_beyond_every_other_member() {
             assert_eq!(st["departure"], departure, "{name} ({side}): {st}");
             assert_eq!(st["member"], departure.is_number(), "{name} ({side}): {st}");
             assert_eq!(st["new_extreme"], want, "{name} ({side}): {st}");
+        }
+    }
+}
+
+/// Power covers the bars after a piece's start up to its end, so every bar is
+/// counted once along the sequence: the turn bar belongs to the piece ending there.
+#[test]
+fn power_windows_leave_out_the_start_bar() {
+    for case in cases() {
+        for (input, level) in case["request"]["levels"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .zip(case["response"]["levels"].as_array().unwrap())
+        {
+            assert_eq!(input["name"], level["name"]);
+            let mut times: Vec<&str> = input["dt"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|v| v.as_str().unwrap())
+                .collect();
+            times.dedup();
+            let count = |from: &Value, to: &Value| {
+                let (from, to) = (from.as_str().unwrap(), to.as_str().unwrap());
+                times.iter().filter(|&&t| t > from && t <= to).count()
+            };
+            let id = &case["request"]["id"];
+            for s in level["strokes"].as_array().unwrap() {
+                let n = count(&s["start_at"], &s["end_at"]);
+                assert_eq!(s["power"]["sample_count"], json!(n), "{id} stroke {s}");
+            }
+            if let Some(u) = level["unfinished"].as_object() {
+                let n = count(&u["anchor_at"], &u["end_price_at"]);
+                assert_eq!(u["power"]["sample_count"], json!(n), "{id} unfinished");
+                let last = json!(times.last().unwrap());
+                let after = count(&u["end_price_at"], &last);
+                assert_eq!(u["bars_after_extreme"], json!(after), "{id} bars after");
+            }
+            if let Some(a) = level["after_extreme"].as_object() {
+                let n = count(&a["start_at"], &a["end_at"]);
+                assert_eq!(a["bar_count"], json!(n), "{id} after_extreme");
+                assert_eq!(a["power"]["sample_count"], json!(n), "{id} after_extreme");
+            }
         }
     }
 }

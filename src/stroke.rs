@@ -44,11 +44,13 @@ impl Endpoint {
 pub struct Stroke {
     pub start_fractal: Fractal,
     pub end_fractal: Fractal,
-    /// The most extreme start-side raw price of its raw span (see
-    /// [`Stroke::place`]); the previous stroke ends here too.
+    /// The most extreme start-side raw price of its raw span, held by the
+    /// first raw bar that reaches it (see [`Stroke::place`]); the previous
+    /// stroke ends here too.
     pub start: Endpoint,
     /// The most extreme end-side raw price from its start up to its end
-    /// fractal's bar, until the next stroke starts and it ends there.
+    /// fractal's bar, held by the first raw bar that reaches it, until the
+    /// next stroke starts and it ends there.
     pub end: Endpoint,
     /// Fractals whose time lies within the stroke's NewBar span.
     pub fractals: Vec<Fractal>,
@@ -112,8 +114,7 @@ impl Stroke {
         };
         let to = raws.partition_point(|r| r.dt < self.end_fractal.dt);
         let side = self.direction.opposite();
-        extreme(&raws[from..to.max(from)], side, Some(self.start_fractal.dt))
-            .unwrap_or(Endpoint::of(&self.start_fractal))
+        extreme(&raws[from..to.max(from)], side).unwrap_or(Endpoint::of(&self.start_fractal))
     }
 
     /// Place both endpoints over `raws` (see [`Stroke::start_after`]); the end
@@ -128,25 +129,17 @@ impl Stroke {
     pub fn end_from(&self, raws: &[RawBar], start: Endpoint) -> Endpoint {
         let from = raws.partition_point(|r| r.dt <= start.at);
         let to = raws.partition_point(|r| r.dt <= self.end_fractal.dt);
-        extreme(
-            &raws[from..to.max(from)],
-            self.direction,
-            Some(self.end_fractal.dt),
-        )
-        .unwrap_or(Endpoint::of(&self.end_fractal))
+        extreme(&raws[from..to.max(from)], self.direction)
+            .unwrap_or(Endpoint::of(&self.end_fractal))
     }
 
     /// The start once this stroke ends at `until`: the most extreme start-side
-    /// raw price from its start up to, not including, `until`.
+    /// raw price from its start up to, not including, `until` (its start wins
+    /// ties, being the first).
     pub fn restart(&self, until: NaiveDateTime, raws: &[RawBar]) -> Endpoint {
         let from = raws.partition_point(|r| r.dt < self.start.at);
         let to = raws.partition_point(|r| r.dt < until);
-        extreme(
-            &raws[from..to.max(from)],
-            self.direction.opposite(),
-            Some(self.start.at),
-        )
-        .unwrap_or(self.start)
+        extreme(&raws[from..to.max(from)], self.direction.opposite()).unwrap_or(self.start)
     }
 
     /// Whether this stroke can end at a raw bar at `until`: no raw bar after
@@ -182,20 +175,13 @@ pub fn price(raw: &RawBar, side: Direction) -> f64 {
     }
 }
 
-/// The most extreme price on `side` among `raws`: the raw bar at `prefer`
-/// when it holds that price, otherwise the earliest that does. `None` when
-/// `raws` is empty.
-pub fn extreme(
-    raws: &[RawBar],
-    side: Direction,
-    prefer: Option<NaiveDateTime>,
-) -> Option<Endpoint> {
+/// The most extreme price on `side` among `raws`, held by the first raw bar
+/// that reaches it. `None` when `raws` is empty.
+pub fn extreme(raws: &[RawBar], side: Direction) -> Option<Endpoint> {
     let mut best: Option<Endpoint> = None;
     for raw in raws {
         let p = price(raw, side);
-        let wins = best
-            .is_none_or(|b| beyond(side, p, b.price) || (p == b.price && Some(raw.dt) == prefer));
-        if wins {
+        if best.is_none_or(|b| beyond(side, p, b.price)) {
             best = Some(Endpoint {
                 at: raw.dt,
                 price: p,
@@ -203,6 +189,36 @@ pub fn extreme(
         }
     }
     best
+}
+
+/// Raw bars a stroke needs strictly between its two fractals' extreme raw bars.
+pub const MIN_RAW_GAP: usize = 3;
+
+/// The raw bar holding a fractal's price: the first such element of its middle
+/// NewBar (the fractal's `dt` when the element cap dropped it).
+pub fn extreme_at(fractal: &Fractal) -> NaiveDateTime {
+    let side = match fractal.mark {
+        Mark::Top => Direction::Up,
+        Mark::Bottom => Direction::Down,
+    };
+    fractal.elements[1]
+        .elements
+        .iter()
+        .find(|r| price(r, side) == fractal.price)
+        .map_or(fractal.dt, |r| r.dt)
+}
+
+/// Raw bars of `bars` strictly between the extreme raw bars of `a` and `b`,
+/// ignoring inclusion, counted up to [`MIN_RAW_GAP`]. A NewBar the element cap
+/// shortened still holds more than that many.
+fn raw_gap(bars: &[Arc<NewBar>], a: &Fractal, b: &Fractal) -> usize {
+    let (from, to) = (extreme_at(a), extreme_at(b));
+    bars.iter()
+        .flat_map(|nb| nb.elements.iter())
+        .skip_while(|r| r.dt <= from)
+        .take_while(|r| r.dt < to)
+        .take(MIN_RAW_GAP)
+        .count()
 }
 
 /// Find the first stroke in `bars`. Returns the stroke, its endpoints still at
@@ -251,7 +267,10 @@ pub fn find_stroke(bars: &[Arc<NewBar>], min_stroke_bars: usize) -> (Option<Stro
     let rest = bars.partition_point(|b| b.dt < end_fractal.elements[0].dt);
     let ab_include = (start_fractal.high > end_fractal.high && start_fractal.low < end_fractal.low)
         || (start_fractal.high < end_fractal.high && start_fractal.low > end_fractal.low);
-    if ab_include || end - start < min_stroke_bars {
+    if ab_include
+        || end - start < min_stroke_bars
+        || raw_gap(&bars[start..end], start_fractal, end_fractal) < MIN_RAW_GAP
+    {
         return (None, 0);
     }
     let stroke = Stroke {

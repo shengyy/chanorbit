@@ -7,6 +7,7 @@
 mod common;
 
 use chanorbit::candidate::candidate_stroke;
+use chanorbit::stroke::extreme_at;
 use chanorbit::{Analyzer, Config, Direction, Mark, RawBar, Stroke, geometry};
 
 fn input_start() -> chrono::NaiveDateTime {
@@ -83,6 +84,39 @@ fn candidate_is_extreme(c: &Analyzer) -> bool {
         _ => true,
     };
     end_stands && candidate_stands
+}
+
+/// Raw bars strictly between the extreme raw bars of a stroke's two fractals.
+fn raw_gap(c: &Analyzer, s: &Stroke) -> usize {
+    let (from, to) = (extreme_at(&s.start_fractal), extreme_at(&s.end_fractal));
+    c.raw_bars()
+        .iter()
+        .filter(|b| b.dt > from && b.dt < to)
+        .count()
+}
+
+/// Every stroke end, and the candidate end, is held by the first raw bar
+/// after its start that reaches it: no earlier bar has the same price.
+fn ends_are_first(c: &Analyzer) -> bool {
+    let earlier = |from, to, up: bool, price: f64| {
+        c.raw_bars()
+            .iter()
+            .any(|b| b.dt > from && b.dt < to && (if up { b.high } else { b.low }) == price)
+    };
+    let strokes = c.strokes().iter().all(|s| {
+        !earlier(
+            s.start_at(),
+            s.end_at(),
+            s.direction == Direction::Up,
+            s.end.price,
+        )
+    });
+    let k = candidate_stroke(c);
+    let candidate = match (k.anchor_at, k.end_price_at, k.end_price, k.direction) {
+        (Some(a), Some(at), Some(price), Some(d)) => !earlier(a, at, d == Direction::Up, price),
+        _ => true,
+    };
+    strokes && candidate
 }
 
 /// No fractal of the last stroke's end mark after its end lies beyond it.
@@ -203,11 +237,11 @@ fn a_broken_start_hands_the_end_back_and_an_extending_stroke_stays() {
 fn a_moved_end_restarts_the_stroke_across_its_end_bar() {
     #[rustfmt::skip]
     let input = bars(&[
-        (13.76, 13.42), (13.60, 13.40), (13.78, 13.51), (13.96, 13.75), (14.45, 14.37),
-        (14.24, 14.23), (14.20, 14.07), (13.80, 13.64),
-        (14.51, 12.51), // 8: end of the down stroke and a high beyond its start
+        (13.76, 13.42), (13.60, 13.40), (13.78, 13.51), (13.96, 13.75), (14.10, 13.90),
+        (14.45, 14.37), (14.24, 14.23), (14.20, 14.07), (13.80, 13.64),
+        (14.51, 12.51), // 9: end of the down stroke and a high beyond its start
         (12.76, 12.64), (12.80, 12.66),
-        (13.84, 11.84), // 11: a low merged upward out of sight
+        (13.84, 11.84), // 12: a low merged upward out of sight
         (12.94, 12.61), (14.02, 13.76), (13.83, 13.66),
     ]);
     let config = Config::default();
@@ -215,16 +249,16 @@ fn a_moved_end_restarts_the_stroke_across_its_end_bar() {
     let (down, up) = (Direction::Down, Direction::Up);
     // Before the next stroke: the end bar holds both prices.
     assert_eq!(
-        ends(&at(14)),
-        [(up, 13.40, 1, 14.45, 4), (down, 14.45, 4, 12.51, 8)]
+        ends(&at(15)),
+        [(up, 13.40, 1, 14.45, 5), (down, 14.45, 5, 12.51, 9)]
     );
-    let c = at(15);
+    let c = at(16);
     assert_eq!(
         ends(&c),
         [
-            (up, 13.40, 1, 14.51, 8),
-            (down, 14.51, 8, 11.84, 11),
-            (up, 11.84, 11, 14.02, 13)
+            (up, 13.40, 1, 14.51, 9),
+            (down, 14.51, 9, 11.84, 12),
+            (up, 11.84, 12, 14.02, 14)
         ]
     );
     for n in 1..=input.len() {
@@ -340,6 +374,83 @@ fn a_bar_beyond_both_ends_cannot_end_the_stroke() {
     );
 }
 
+/// Two raw bars between the bottom's and the top's extreme bars form no
+/// stroke, even with six NewBars; an equal later top does not unlock it, a
+/// higher one does. Three raw bars between form the stroke at once.
+#[test]
+fn a_stroke_needs_three_raw_bars_between_its_fractals() {
+    #[rustfmt::skip]
+    let input = bars(&[
+        (10.5, 10.2), (10.3, 10.0), // 1: bottom
+        (10.6, 10.3), (10.9, 10.6),
+        (11.2, 10.9), // 4: top, two raw bars after the bottom
+        (11.0, 10.7), (10.8, 10.5), (10.9, 10.6), (11.1, 10.8),
+        (11.2, 10.95), // 9: an equal top
+        (11.0, 10.7), (10.8, 10.5), (11.1, 10.8),
+        (11.4, 11.1), // 13: a higher top
+        (11.2, 10.9),
+    ]);
+    let config = Config::default();
+    let at = |n: usize| Analyzer::from_bars(input[..n].iter().copied(), config);
+    for n in [6, 11, 14] {
+        assert_eq!(ends(&at(n)), [], "input {n}");
+    }
+    let c = at(15);
+    assert_eq!(ends(&c), [(Direction::Up, 10.0, 1, 11.4, 13)]);
+    assert_eq!(raw_gap(&c, &c.strokes()[0]), 11);
+
+    #[rustfmt::skip]
+    let input = bars(&[
+        (10.5, 10.2), (10.3, 10.0), (10.6, 10.3), (10.8, 10.5), (11.0, 10.7),
+        (11.2, 10.9), // 5: top, three raw bars after the bottom
+        (11.0, 10.7),
+    ]);
+    let c = Analyzer::from_bars(input, config);
+    assert_eq!(ends(&c), [(Direction::Up, 10.0, 1, 11.2, 5)]);
+    assert_eq!(raw_gap(&c, &c.strokes()[0]), 3);
+}
+
+/// Equal lows: the stroke ends at the first raw bar holding its low, though
+/// inclusion dates the bottom fractal at the later one, and the candidate of
+/// an extending stroke stops at the first bar reaching the new low; once the
+/// extension is a stroke it ends there too.
+#[test]
+fn an_equal_extreme_belongs_to_the_first_bar_reaching_it() {
+    #[rustfmt::skip]
+    let input = bars(&[
+        (10.6, 10.3), (11.0, 10.7),
+        (11.4, 11.1), // 2: top
+        (11.2, 10.9), (11.0, 10.7), (10.8, 10.5), (10.6, 10.3),
+        (10.4, 10.0), // 7: first 10.0
+        (10.3, 10.0), // 8: inside 7, the merged bottom's time
+        (10.5, 10.2),
+        (10.3, 9.8), // 10: first 9.8
+        (10.2, 9.9),
+        (10.0, 9.8), // 12: 9.8 again
+        (10.4, 10.1), (10.6, 10.3),
+    ]);
+    let config = Config::default();
+    let at = |n: usize| Analyzer::from_bars(input[..n].iter().copied(), config);
+    let start = input_start();
+    let day = |dt: Option<chrono::NaiveDateTime>| dt.map(|t| (t - start).num_days());
+    let c = at(10);
+    assert_eq!(c.strokes()[0].end_fractal.dt, input[8].dt);
+    assert_eq!(ends(&c), [(Direction::Down, 11.4, 2, 10.0, 7)]);
+    for n in 11..=13 {
+        let k = candidate_stroke(&at(n));
+        assert_eq!(k.kind.as_deref(), Some("extension"), "input {n}");
+        assert_eq!(
+            (k.end_price, day(k.end_price_at)),
+            (Some(9.8), Some(10)),
+            "input {n}"
+        );
+    }
+    assert_eq!(ends(&at(15)), [(Direction::Down, 11.4, 2, 9.8, 10)]);
+    for n in 1..=input.len() {
+        assert!(ends_are_first(&at(n)), "input {n}");
+    }
+}
+
 /// Revisions undo extensions, reopened strokes and moved endpoints exactly.
 #[test]
 fn revisions_undo_endpoint_changes() {
@@ -372,7 +483,9 @@ fn revisions_undo_endpoint_changes() {
 }
 
 /// After every input of every baseline: starts and ends are extreme over the
-/// stroke's raw span, the last end is extreme among the unfinished fractals,
+/// stroke's raw span, every stroke has three raw bars between its fractals'
+/// extremes, ends are held by the first bar reaching them, the last end is
+/// extreme among the unfinished fractals,
 /// the candidate leaves no raw price beyond the last end or its own, and the
 /// last stroke never returns to the stroke before it (an extending stroke is
 /// kept, not withdrawn). The first retained stroke is checked too.
@@ -392,7 +505,9 @@ fn baselines_keep_endpoints_extreme_after_every_input() {
             for s in c.strokes() {
                 assert!(starts_are_extreme(&c, s), "{name} input {i}: {s:?}");
                 assert!(ends_are_extreme(&c, s), "{name} input {i}: {s:?}");
+                assert!(raw_gap(&c, s) >= 3, "{name} input {i}: {s:?}");
             }
+            assert!(ends_are_first(&c), "{name} input {i}");
             assert!(end_is_extreme(&c), "{name} input {i}");
             assert!(candidate_is_extreme(&c), "{name} input {i}");
             let last = c.strokes().last().cloned();

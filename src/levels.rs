@@ -10,7 +10,7 @@ use crate::geometry::{FractalFact, relation};
 use crate::levels_compare::Comparisons;
 use crate::macd::{MacdSeries, retained_macd};
 use crate::power::{Power, interval_power, stroke_power};
-use crate::stroke::Direction;
+use crate::stroke::{Direction, extreme};
 use chrono::NaiveDateTime;
 use serde::{Serialize, Serializer};
 
@@ -213,18 +213,17 @@ fn up(d: Direction) -> bool {
     d == Direction::Up
 }
 
-/// Raw extreme over `(start, end]`: the first bar holding it, except that
-/// the end bar wins a tie (an earlier bar only when strictly beyond it).
+/// Raw extreme over `(start, end]`, held by the first bar that reaches it.
 pub fn raw_extreme(
     raw: &[RawBar],
     d: Direction,
     start: NaiveDateTime,
     end: NaiveDateTime,
 ) -> Option<Extreme> {
-    extreme_of(&raw[rows(raw, start, end)], d, end)
+    extreme_of(&raw[rows(raw, start, end)], d)
 }
 
-/// Raw extreme over `[from, end]`, the same tie rule.
+/// Raw extreme over `[from, end]`, the same rule.
 fn raw_extreme_from(
     raw: &[RawBar],
     d: Direction,
@@ -233,32 +232,14 @@ fn raw_extreme_from(
 ) -> Option<Extreme> {
     let a = raw.partition_point(|b| b.dt < from);
     let b = raw.partition_point(|b| b.dt <= end).max(a);
-    extreme_of(&raw[a..b], d, end)
+    extreme_of(&raw[a..b], d)
 }
 
-fn extreme_of(bars: &[RawBar], d: Direction, end: NaiveDateTime) -> Option<Extreme> {
-    let price = |b: &RawBar| if up(d) { b.high } else { b.low };
-    let mut x = bars
-        .iter()
-        .map(|b| Extreme {
-            price: price(b),
-            at: b.dt,
-        })
-        .reduce(|a, b| {
-            let beyond = if up(d) {
-                b.price > a.price
-            } else {
-                b.price < a.price
-            };
-            if beyond { b } else { a }
-        })?;
-    if let Some(last) = bars.last()
-        && last.dt == end
-        && price(last) == x.price
-    {
-        x.at = last.dt;
-    }
-    Some(x)
+fn extreme_of(bars: &[RawBar], d: Direction) -> Option<Extreme> {
+    extreme(bars, d).map(|x| Extreme {
+        price: x.price,
+        at: x.at,
+    })
 }
 
 fn dif_extreme(
