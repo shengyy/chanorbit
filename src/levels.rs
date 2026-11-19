@@ -9,7 +9,7 @@ use crate::centre::{Centre, canonical_centres};
 use crate::geometry::{FractalFact, relation};
 use crate::levels_compare::Comparisons;
 use crate::macd::{MacdSeries, retained_macd};
-use crate::power::{Power, interval_power, stroke_power};
+use crate::power::{Power, Span, interval_power, stroke_power};
 use crate::stroke::{Direction, extreme};
 use chrono::NaiveDateTime;
 use serde::{Serialize, Serializer};
@@ -388,6 +388,11 @@ impl Level {
                 last_dt,
             )
         {
+            let span = if kind == "reverse" {
+                Span::Turn
+            } else {
+                Span::Extension
+            };
             self.unfinished = Some(Unfinished {
                 kind,
                 direction: d,
@@ -398,19 +403,20 @@ impl Level {
                 bars_after_extreme: rows(raw, et, last).len(),
                 raw_extreme: raw_extreme(raw, d, a, et),
                 dif_extreme: dif_extreme(raw, macd, d, a, et),
-                power: interval_power(c, macd, a, et),
+                power: interval_power(c, macd, span, a, et),
             });
             let pd = d.opposite();
             if let Some(x) = raw_extreme(raw, pd, et, last) {
+                let power = interval_power(c, macd, Span::Turn, et, last);
                 self.after_extreme = Some(AfterExtreme {
                     direction: pd,
                     start_at: et,
                     start_price: e,
                     end_at: last,
                     raw_extreme: x,
-                    bar_count: rows(raw, et, last).len(),
+                    bar_count: power.sample_count,
                     dif_extreme: dif_extreme(raw, macd, pd, et, last),
-                    power: interval_power(c, macd, et, last),
+                    power,
                 });
             }
         }

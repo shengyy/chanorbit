@@ -80,7 +80,11 @@ Segments are maximal runs of same-sign histogram bars: zero continues an open ru
 
 ## Interval power
 
-Power over `(start_at, end_at]` uses retained raw bars with `start_at < dt ≤ end_at`; their count is `sample_count`. The MACD reason, in order:
+Power over an interval uses the retained raw bars from `start_at` to `end_at`; their count is `sample_count`. A stroke, or a piece that starts where price turned (the unfinished reverse segment, the path after the extreme, the tail), includes its start bar: `start_at ≤ dt ≤ end_at`. An extension (`kind = extension`) adds the bars after the end it extends: `start_at < dt ≤ end_at`.
+
+**Why the start bar counts.** A stroke runs from the bar holding its start to the bar holding its end, so its MACD area, bar count and mean volume cover both. The bar where two strokes meet is in both intervals; its histogram has one sign, so it adds to the same-direction area of only one of them. A wide bar that holds one stroke's end and opens the next adds to the next stroke's same-direction area when its histogram already has that sign. A piece that starts where price turned has the interval of the stroke it would become, so its figures do not jump when that stroke is confirmed there; an extension added to the stroke it extends gives that stroke's new interval. Membership (which element of a [level sequence](#segments-and-ranges) holds a bar) and raw and DIF extremes keep `(start_at, end_at]`: there the shared bar belongs to the earlier element.
+
+The MACD reason, in order:
 
 - `missing_coverage`: `start_at ≥ end_at`, either endpoint is not a retained raw bar, raw times are not strictly increasing, or no rows.
 - `non_finite`: a non-finite close at or before `end_at`.
@@ -88,7 +92,7 @@ Power over `(start_at, end_at]` uses retained raw bars with `start_at < dt ≤ e
 
 When ready, `positive_area` and `negative_area` are the sums of `max(hist, 0)` and `max(-hist, 0)` over the rows. `dif_at_end`/`dea_at_end` are the values at `end_at` when present. `ready_count` counts rows with all three MACD values. `mean_volume` needs coverage and rows. Unavailable values are `null`, never 0.
 
-For a stroke the interval is its endpoint times, `(start_at, end_at]`, which follow the [stroke endpoints](#strokes) (raw bars, not necessarily fractal times). If a raw bar inside the stroke's NewBars with time in `(start_at, end_at]` is no longer retained, areas and `mean_volume` are unavailable with `missing_coverage`.
+For a stroke the interval is its endpoint times, `[start_at, end_at]`, which follow the [stroke endpoints](#strokes) (raw bars, not necessarily fractal times). If a raw bar inside the stroke's NewBars with time in `[start_at, end_at]` is no longer retained, areas and `mean_volume` are unavailable with `missing_coverage`.
 
 ## Candidate stroke
 
@@ -115,8 +119,8 @@ Every fact appears once. Field names follow the consumer's vocabulary.
 | `latest_centre`, `previous_centre` | Indices into `centre_sequence` of the last and second-to-last centre with at least three members that touch the core, or `null` |
 | `centre_relation` | When both exist: latest versus previous, `core` on `[zd, zg]` and `outer` on `[dd, gg]`, each `above`, `below`, `touch` or `overlap` |
 | `candidate_stroke` | `state`, `reason`, `kind`, `direction`, `anchor_at`, `anchor_price`, `anchor_price_at`, `end_price`, `end_price_at` |
-| `candidate_power` | Power over `(anchor_at, last input dt]` of an available candidate, or `null` |
-| `candidate_endpoint_power` | Power over `(anchor_at, end_price_at]` of an available candidate, or `null` |
+| `candidate_power` | Power from `anchor_at` to the last input of an available candidate (the anchor bar included for `kind = reverse`, see [interval power](#interval-power)), or `null` |
+| `candidate_endpoint_power` | Power from `anchor_at` to `end_price_at` of an available candidate, the same way, or `null` |
 | `macd.bars` | Every retained raw bar: `dt`, `dif`, `dea`, `hist` (`null` when not finite) |
 | `macd.segments` | `sign`, `start_at`, `end_at`, `bars`, `peak`, `peak_at` |
 | power | `sample_count`, `mean_volume`, `macd`: `status` (`ready`/`unavailable`), `reason`, `positive_area`, `negative_area`, `dif_at_end`, `dea_at_end`, `ready_count` |
@@ -183,14 +187,14 @@ A **point** of a level is one of its raw bars together with a side, high or low 
 
 ### Segments and ranges
 
-A **segment** of a level is one of its window strokes or its unfinished reverse segment (below). Its interval is `(start_at, end_at]`: the start bar belongs to the segment before. The level's **sequence** is, in time order, its window strokes, the unfinished segment (either kind), the path after the extreme, and the **tail** (`"tail"`: the raw bars after all of these when no available candidate covers them, read opposite to the last stroke; with finite prices the candidate is always available, so a response has no tail); every raw bar after the first window stroke's start lies in exactly one element.
+A **segment** of a level is one of its window strokes or its unfinished reverse segment (below). Its interval is `(start_at, end_at]`: the start bar belongs to the segment before (its power also covers the start bar, see [interval power](#interval-power)). The level's **sequence** is, in time order, its window strokes, the unfinished segment (either kind), the path after the extreme, and the **tail** (`"tail"`: the raw bars after all of these when no available candidate covers them, read opposite to the last stroke; with finite prices the candidate is always available, so a response has no tail); every raw bar after the first window stroke's start lies in exactly one element.
 
 - **Raw extreme** of a segment: over the retained raw bars with `start_at < dt ≤ end_at`, the highest high for an up segment or the lowest low for a down segment, with `at` the first bar holding it. The same rule holds for every raw extreme below (strokes, unfinished segment, path after the extreme, tail, retest, `passed_by`). For a window stroke and the unfinished segment it is the segment's end, which is held by the first bar reaching it too ([endpoints](#strokes)).
 - **DIF extreme**: over the same bars, the largest DIF for an up segment or the smallest for a down segment, with its first bar; `null` when some bar in the interval has no DIF.
 
-**Unfinished segment** (`unfinished`): the [candidate stroke](#candidate-stroke) when it is `available`, interval `(anchor_at, end_price_at]`, `start_price = anchor_price`. Only `kind = reverse` is a segment; `kind = extension` (the last stroke is being extended) is reported and is an element of the sequence (so a latest centre's exit can lie in it), but is never a retest, a zone object or a `passed_by` segment.
+**Unfinished segment** (`unfinished`): the [candidate stroke](#candidate-stroke) when it is `available`, interval `(anchor_at, end_price_at]` (power from `anchor_at`, see [interval power](#interval-power)), `start_price = anchor_price`. Only `kind = reverse` is a segment; `kind = extension` (the last stroke is being extended) is reported and is an element of the sequence (so a latest centre's exit can lie in it), but is never a retest, a zone object or a `passed_by` segment.
 
-**Path after the extreme** (`after_extreme`): when the candidate is available, the raw bars with `end_price_at < dt ≤` the last input, read in the direction opposite to the candidate. Every figure covers exactly those bars: the raw extreme (the farthest opposite price, `at`), `bar_count`, the DIF extreme and `power`; only its `price` comparison stops at the raw extreme (start price to extreme). It is a path, not a stroke and not a segment; `null` when no bar follows `end_price_at`.
+**Path after the extreme** (`after_extreme`): when the candidate is available, the raw bars with `end_price_at < dt ≤` the last input, read in the direction opposite to the candidate. The raw extreme (the farthest opposite price, `at`) and the DIF extreme cover exactly those bars; `power` and `bar_count` also cover the bar at `end_price_at`, where it turned ([interval power](#interval-power)); only its `price` comparison stops at the raw extreme (start price to extreme). It is a path, not a stroke and not a segment; `null` when no bar follows `end_price_at`.
 
 ### Stroke window
 
@@ -224,7 +228,7 @@ Facts by state:
 
 ### Comparisons
 
-Only segments of the same direction are compared, numerator against denominator: `area` (the same-direction MACD area: positive area for up, negative area for down), `price` (`|end_price − start_price|`; for the path after the extreme, from its start price to its raw extreme), `mean_volume` and `bar_count` (raw bars in the interval). A ratio is `null` when the numerator is negative, the denominator is not positive, or either is unavailable. Between the two (retained raw bars from the earlier one's end to the later one's start, both included): `min_abs_dif`, `dif_crossed_zero` and `dea_crossed_zero` (both a strictly positive and a strictly negative value occur); `null` values when any of those bars lacks the value.
+Only segments of the same direction are compared, numerator against denominator: `area` (the same-direction MACD area: positive area for up, negative area for down), `price` (`|end_price − start_price|`; for the path after the extreme, from its start price to its raw extreme), `mean_volume` and `bar_count` (raw bars of its [power](#interval-power), `sample_count`). A ratio is `null` when the numerator is negative, the denominator is not positive, or either is unavailable. Between the two (retained raw bars from the earlier one's end to the later one's start, both included): `min_abs_dif`, `dif_crossed_zero` and `dea_crossed_zero` (both a strictly positive and a strictly negative value occur); `null` values when any of those bars lacks the value.
 
 `completed` rows compare window strokes (the last stroke included, finished or not); `in_progress` rows have a numerator that is still moving (the unfinished segment, the path after the extreme, an extension, the tail, or a departure that is one of these), valued at its current extreme. The tail's `price` runs from the last stroke's end price to the tail's raw extreme. `departure_vs_entry`, `advance_vs_departure` and `previous_departure_vs_entry` exist only when the departure runs toward its exit side (`direction` up with `edge = zg`, down with `zd`). Rows, when both sides exist and share a direction:
 
@@ -266,8 +270,8 @@ The engine checks that each placed object lands in exactly one zone. When a boun
 | `status` | `ready` with at least one stroke, otherwise `missing_material` (every other field but `last_input_at` empty or `null`) |
 | `last_input_at` | The level's last `dt` |
 | `strokes` | [Window](#stroke-window) strokes: `direction`, `start_at`, `end_at`, `start_price`, `end_price`, `high`, `low`, `newbar_count`, `finished`, `raw_extreme` {`price`, `at`}, `dif_extreme` {`value`, `at`} or `null`, `power` (as in the geometry snapshot; `sample_count` is the bar count) |
-| `unfinished` | Available candidate: `kind`, `direction`, `anchor_at`, `anchor_price`, `end_price`, `end_price_at`, `bars_after_extreme` (raw bars after `end_price_at`), `raw_extreme`, `dif_extreme`, `power` over `(anchor_at, end_price_at]`; otherwise `null` |
-| `after_extreme` | [Path after the extreme](#segments-and-ranges): `direction`, `start_at` (`end_price_at`), `start_price` (`end_price`), `end_at` (last input), `raw_extreme`, `bar_count`, `dif_extreme`, `power`, all over `(start_at, end_at]`; or `null` |
+| `unfinished` | Available candidate: `kind`, `direction`, `anchor_at`, `anchor_price`, `end_price`, `end_price_at`, `bars_after_extreme` (raw bars after `end_price_at`), `raw_extreme`, `dif_extreme` over `(anchor_at, end_price_at]`, `power` (the anchor bar included for `kind = reverse`); otherwise `null` |
+| `after_extreme` | [Path after the extreme](#segments-and-ranges): `direction`, `start_at` (`end_price_at`), `start_price` (`end_price`), `end_at` (last input), `raw_extreme` and `dif_extreme` over `(start_at, end_at]`, `bar_count` and `power` over `[start_at, end_at]`; or `null` |
 | `fractals` | `dt`, `mark`, `price`, `confirmed_at` over the window |
 | `last_stroke_member` | `member`, `reason` |
 | `centres` | Oldest first: `first_member`, `last_member` (window positions), `member_count`, `entry`, `start_at`, `end_at`, `zd`, `zg`, `dd`, `gg`, `versus_next` {`core`, `outer`} or `null` for the last, `ended_by` (position in `centres` of the next one, `null` for the last), `price_versus_core`, `price_versus_outer`, `state` |
