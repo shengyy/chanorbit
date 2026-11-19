@@ -348,10 +348,11 @@ fn new_extreme_is_strictly_beyond_every_other_member() {
             json!("unfinished"),
             json!(false),
         ),
-        // An up candidate whose last bar touches the core and closes below it.
+        // An up candidate whose last bar touches the core and closes below it;
+        // the down stroke before it has three raw bars between its extremes.
         (
             "against the exit side",
-            vec![(10.5, 3), (10.92, 2)],
+            vec![(10.5, 4), (10.92, 2)],
             json!("unfinished"),
             Value::Null,
         ),

@@ -351,26 +351,21 @@ impl Analyzer {
         self.extension().is_some()
     }
 
-    /// The most extreme raw price after the last stroke's end and beyond it,
-    /// or `None` (ties: see [`Analyzer::after_end`]).
+    /// The most extreme raw price after the last stroke's end and beyond it
+    /// (see [`Analyzer::after_end`]), or `None`.
     pub fn extension(&self) -> Option<Endpoint> {
         let stroke = self.strokes.last()?;
         self.after_end(stroke.direction)
             .filter(|x| beyond(stroke.direction, x.price, stroke.end.price))
     }
 
-    /// The most extreme raw price on `side` after the last stroke's end. On
-    /// ties the raw bar at the time of the first unfinished NewBar with that
-    /// boundary wins (where a later fractal would put it), else the earliest.
+    /// The most extreme raw price on `side` after the last stroke's end, held
+    /// by the first raw bar that reaches it.
     pub fn after_end(&self, side: Direction) -> Option<Endpoint> {
         let end = self.strokes.last()?.end.at;
-        let raws = &self.raw_bars[self.raw_bars.partition_point(|b| b.dt <= end)..];
-        let x = extreme(raws, side, None)?;
-        let at = self
-            .pending_bars
-            .iter()
-            .find(|b| b.dt > end && (if side == Direction::Up { b.high } else { b.low }) == x.price)
-            .map(|b| b.dt);
-        extreme(raws, side, at)
+        extreme(
+            &self.raw_bars[self.raw_bars.partition_point(|b| b.dt <= end)..],
+            side,
+        )
     }
 }
