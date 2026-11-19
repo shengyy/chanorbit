@@ -201,21 +201,33 @@ fn append(request: &Value, bars: &[(f64, f64)]) -> Value {
     out
 }
 
+/// The base second stage and its retest's low.
+fn second_base() -> (Value, f64) {
+    let base = baseline("second.json.gz", 0);
+    let got = stages(&base);
+    let stage = &got["stages"][0];
+    assert_eq!(stage["kind"], "second");
+    assert_eq!(stage["retest_broken"], false);
+    let low = stage["retest"]["low"].as_f64().unwrap();
+    (base, low)
+}
+
+/// `low` moved by `offset`, rounded to a tick.
+fn at(low: f64, offset: f64) -> f64 {
+    ((low + offset) * 100.0).round() / 100.0
+}
+
 /// A raw low below the retest's low before it is a fractal: the retest stays
 /// the last stroke (being extended) and the stage stands, marked broken.
 #[test]
 fn a_new_low_after_the_retest_marks_it_broken() {
-    let base = baseline("second.json.gz", 0);
-    let before = stages(&base);
-    let stage = &before["stages"][0];
-    assert_eq!(stage["kind"], "second");
-    assert_eq!(stage["retest"]["low"], 7.49);
-    assert_eq!(stage["retest_broken"], false);
+    let (base, l) = second_base();
+    assert_eq!(l, 8.68);
     // Touching the low does not break it; going below does.
-    for (low, broken) in [(7.49, false), (7.40, true)] {
-        let got = stages(&append(&base, &[(7.70, low)]));
+    for (low, broken) in [(l, false), (at(l, -0.09), true)] {
+        let got = stages(&append(&base, &[(at(l, 0.21), low)]));
         let stage = &got["stages"][0];
-        assert_eq!(stage["retest"]["low"], 7.49, "{low}");
+        assert_eq!(stage["retest"]["low"], l, "{low}");
         assert_eq!(stage["retest_broken"], broken, "{low}");
         assert_eq!(stage["beyond_start"], false, "{low}");
     }
@@ -226,11 +238,23 @@ fn a_new_low_after_the_retest_marks_it_broken() {
 /// stage stands and there is nothing to mark.
 #[test]
 fn a_new_low_after_a_rebound_stroke_leaves_no_stage() {
-    let base = baseline("second.json.gz", 0);
-    #[rustfmt::skip]
-    let rebound = [(7.95, 7.70), (8.05, 7.85), (8.15, 7.95), (8.25, 8.05), (8.35, 8.15), (8.30, 8.10)];
+    let (base, l) = second_base();
+    let rebound: Vec<(f64, f64)> = [
+        (0.46, 0.21),
+        (0.56, 0.36),
+        (0.66, 0.46),
+        (0.76, 0.56),
+        (0.86, 0.66),
+        (0.81, 0.61),
+    ]
+    .iter()
+    .map(|&(h, lo)| (at(l, h), at(l, lo)))
+    .collect();
     let mut request = append(&base, &rebound);
-    request = append(&request, &[(8.0, 7.6), (7.7, 7.40)]);
+    request = append(
+        &request,
+        &[(at(l, 0.51), at(l, 0.11)), (at(l, 0.21), at(l, -0.09))],
+    );
     let mut geometry_request = request.clone();
     geometry_request
         .as_object_mut()
@@ -242,7 +266,7 @@ fn a_new_low_after_a_rebound_stroke_leaves_no_stage() {
     let last = g["strokes"].as_array().unwrap().last().unwrap();
     assert_eq!(
         (&last["direction"], &last["start_price"]),
-        (&json!("向上"), &json!(7.49))
+        (&json!("向上"), &json!(l))
     );
     assert_eq!(stages(&request)["stages"], json!([]));
 }

@@ -377,3 +377,51 @@ fn new_extreme_is_strictly_beyond_every_other_member() {
         }
     }
 }
+
+/// Power covers the start bar of a stroke and of every piece starting where
+/// price turned; an extension covers the bars after the end it extends.
+#[test]
+fn power_windows_include_the_bar_where_price_turned() {
+    for case in cases() {
+        for (input, level) in case["request"]["levels"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .zip(case["response"]["levels"].as_array().unwrap())
+        {
+            assert_eq!(input["name"], level["name"]);
+            let mut times: Vec<&str> = input["dt"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|v| v.as_str().unwrap())
+                .collect();
+            times.dedup();
+            let count = |from: &Value, to: &Value, start_bar: bool| {
+                let (from, to) = (from.as_str().unwrap(), to.as_str().unwrap());
+                times
+                    .iter()
+                    .filter(|&&t| (t > from || (start_bar && t == from)) && t <= to)
+                    .count()
+            };
+            let id = &case["request"]["id"];
+            for s in level["strokes"].as_array().unwrap() {
+                let n = count(&s["start_at"], &s["end_at"], true);
+                assert_eq!(s["power"]["sample_count"], json!(n), "{id} stroke {s}");
+            }
+            if let Some(u) = level["unfinished"].as_object() {
+                let turn = u["kind"] == "reverse";
+                let n = count(&u["anchor_at"], &u["end_price_at"], turn);
+                assert_eq!(u["power"]["sample_count"], json!(n), "{id} unfinished");
+                let last = json!(times.last().unwrap());
+                let after = count(&u["end_price_at"], &last, false);
+                assert_eq!(u["bars_after_extreme"], json!(after), "{id} bars after");
+            }
+            if let Some(a) = level["after_extreme"].as_object() {
+                let n = count(&a["start_at"], &a["end_at"], true);
+                assert_eq!(a["bar_count"], json!(n), "{id} after_extreme");
+                assert_eq!(a["power"]["sample_count"], json!(n), "{id} after_extreme");
+            }
+        }
+    }
+}
