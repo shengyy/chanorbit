@@ -392,7 +392,7 @@ fn a_departure_in_an_extension_is_the_whole_last_stroke() {
     // then a fall to 9 that extends that stroke out of the core.
     let leg = |p: &[f64]| p.iter().map(|&x| (x, 6)).collect::<Vec<_>>();
     let centre = [16.0, 20.0, 10.0, 14.0, 11.0, 13.5];
-    let extending: Vec<(f64, usize)> = [(12.0, 1), (16.0, 40)]
+    let extending: Vec<(f64, usize)> = [(12.0, 1), (16.0, 180)]
         .into_iter()
         .chain(leg(&centre[1..]))
         .chain([(11.2, 6), (11.6, 2), (9.0, 6)])
@@ -575,4 +575,71 @@ fn power_windows_leave_out_the_start_bar() {
             }
         }
     }
+}
+
+/// Linear legs between pivots (`bars` inputs each), every bar 0.1 wide.
+fn path(pivots: &[(f64, usize)]) -> Vec<f64> {
+    let mut prices = vec![pivots[0].0];
+    for w in pivots.windows(2) {
+        let ((a, _), (b, n)) = (w[0], w[1]);
+        prices.extend((1..=n).map(|k| a + (b - a) * k as f64 / n as f64));
+    }
+    prices
+}
+
+fn level(name: &str, dt: Vec<String>, prices: &[f64]) -> Value {
+    let column = |f: fn(f64) -> f64| prices.iter().map(|&p| f(p)).collect::<Vec<_>>();
+    json!({"name": name, "dt": dt, "high": column(|p| p + 0.05),
+        "low": column(|p| p - 0.05), "close": prices, "vol": vec![100.0; prices.len()]})
+}
+
+#[test]
+fn a_child_series_starting_inside_the_last_stroke_is_zoned_from_its_first_stroke() {
+    // Daily: a centre, then a long last stroke down from day 30 and a short
+    // rise. The 4-bar-a-day child starts on day 32, inside that stroke, and
+    // steps down through seven small centres, more than the five listed.
+    let daily = path(&[
+        (16.0, 0),
+        (20.0, 6),
+        (10.0, 6),
+        (14.0, 6),
+        (11.0, 6),
+        (13.5, 6),
+        (5.0, 60),
+        (6.0, 10),
+    ]);
+    let start = chanorbit::contract::parse_dt("2026-01-05T15:00:00").unwrap();
+    let day = |i: usize| start + chrono::Duration::days(i as i64);
+    let fmt = |t: chrono::NaiveDateTime| t.format("%Y-%m-%dT%H:%M:%S").to_string();
+    let d_dt: Vec<String> = (0..daily.len()).map(|i| fmt(day(i))).collect();
+    let mut pivots = vec![(13.2, 0)];
+    for j in 0..7 {
+        let b = 13.0 - 1.1 * j as f64;
+        pivots.extend([(b - 0.8, 6), (b - 0.2, 6), (b - 0.7, 6), (b - 0.3, 6)]);
+    }
+    let child_days = daily.len() - 32;
+    let used: usize = pivots.iter().map(|p| p.1).sum();
+    pivots.push((5.5, 4 * child_days - 1 - used));
+    let child = path(&pivots);
+    let c_dt: Vec<String> = (0..child.len())
+        .map(|k| fmt(day(32 + k / 4) - chrono::Duration::hours([5, 4, 1, 0][k % 4])))
+        .collect();
+    let request = json!({"levels": [level("d", d_dt, &daily), level("h", c_dt.clone(), &child)]});
+    let v = answer(&request);
+    let (parent, finer) = (&v["levels"][0], &v["levels"][1]);
+    let zones = &parent["child"]["zones"];
+    assert_eq!(zones["child_starts_after"], "last_start", "{zones}");
+    assert_eq!(finer["centres"].as_array().unwrap().len(), 5);
+    let alone = {
+        let req = json!({"dt": c_dt, "high": request["levels"][1]["high"],
+            "low": request["levels"][1]["low"], "close": child, "vol": vec![100.0; child.len()]});
+        let (text, ok) = handle_command(Command::Geometry, &req.to_string());
+        assert!(ok);
+        serde_json::from_str::<Value>(&text).unwrap()["strokes"].clone()
+    };
+    let strokes = finer["strokes"].as_array().unwrap();
+    assert_eq!(strokes.len(), alone.as_array().unwrap().len());
+    let placed = zones["objects"].as_array().unwrap();
+    let placed = placed.iter().filter(|o| o["kind"] == "stroke").count();
+    assert_eq!(placed, strokes.len());
 }

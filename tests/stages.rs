@@ -154,14 +154,14 @@ fn observe_from_is_checked_and_belongs_to_stages_only() {
     let (text, ok) = handle_command(Command::Stages, &request.to_string());
     let v: Value = serde_json::from_str(&text).unwrap();
     assert!(!ok);
-    assert_eq!(v["schema"], "chanorbit.stages/2");
+    assert_eq!(v["schema"], "chanorbit.stages/3");
     assert_eq!(v["error"]["kind"], "invalid_request");
 
     request["observe_from"] = json!("2026-01-05T15:00:00");
     let (text, ok) = handle_command(Command::Geometry, &request.to_string());
     let v: Value = serde_json::from_str(&text).unwrap();
     assert!(!ok);
-    assert_eq!(v["schema"], "chanorbit.geometry/1");
+    assert_eq!(v["schema"], "chanorbit.geometry/2");
     assert_eq!(v["error"]["kind"], "invalid_request");
 }
 
@@ -170,7 +170,7 @@ fn stage_errors_carry_the_stages_schema() {
     let (text, ok) = handle_command(Command::Stages, "[1]");
     let v: Value = serde_json::from_str(&text).unwrap();
     assert!(!ok);
-    assert_eq!(v["schema"], "chanorbit.stages/2");
+    assert_eq!(v["schema"], "chanorbit.stages/3");
     assert_eq!(v["error"]["kind"], "invalid_input");
 }
 

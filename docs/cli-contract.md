@@ -61,15 +61,15 @@ Every `dt` labels the **end** of its bar's period, and a bar still forming carri
 
 ## Response
 
-`geometry`: one object with `schema` (`chanorbit.geometry/1`), `id` (echo), then the [geometry snapshot](structure-contract.md#geometry-snapshot) fields at the top level.
+`geometry`: one object with `schema` (`chanorbit.geometry/2`), `id` (echo), then the [geometry snapshot](structure-contract.md#geometry-snapshot) fields at the top level.
 
-`stages`: one object with `schema` (`chanorbit.stages/2`), `id` (echo) and `stages` ([stages output](structure-contract.md#stages-output)).
+`stages`: one object with `schema` (`chanorbit.stages/3`), `id` (echo) and `stages` ([stages output](structure-contract.md#stages-output)).
 
-`levels`: one object with `schema` (`chanorbit.levels/2`), `id` (echo) and `levels` ([levels output](structure-contract.md#levels-output)). A complete example (illustrative values; the finest level has no `child`):
+`levels`: one object with `schema` (`chanorbit.levels/3`), `id` (echo) and `levels` ([levels output](structure-contract.md#levels-output)). A complete example (illustrative values; the finest level has no `child`):
 
 ```json
 {
-  "schema": "chanorbit.levels/2",
+  "schema": "chanorbit.levels/3",
   "id": "600000.SH@2026-11-16T11:00:00",
   "levels": [
     {
@@ -189,7 +189,7 @@ Every time is written as `YYYY-MM-DDTHH:MM:SS`, the same format as the input.
 Error response, one line, carrying the command's schema:
 
 ```json
-{"schema":"chanorbit.geometry/1","id":"…","error":{"kind":"invalid_request","message":"…"}}
+{"schema":"chanorbit.geometry/2","id":"…","error":{"kind":"invalid_request","message":"…"}}
 ```
 
 | `kind` | Cause |

@@ -11,11 +11,11 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 /// Output contract version of `geometry`, carried by each of its responses.
-pub const SCHEMA: &str = "chanorbit.geometry/1";
+pub const SCHEMA: &str = "chanorbit.geometry/2";
 /// Output contract version of `stages`.
-pub const STAGES_SCHEMA: &str = "chanorbit.stages/2";
+pub const STAGES_SCHEMA: &str = "chanorbit.stages/3";
 /// Output contract version of `levels`.
-pub const LEVELS_SCHEMA: &str = "chanorbit.levels/2";
+pub const LEVELS_SCHEMA: &str = "chanorbit.levels/3";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Command {

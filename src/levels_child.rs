@@ -307,9 +307,15 @@ fn boundaries(parent: &Level, child: &Level) -> Result<Boundaries, &'static str>
     })
 }
 
-/// The child time of the parent's last-stroke start, when the parent has strokes.
+/// The child time of the parent's last-stroke start, when the parent has
+/// strokes. When the child series starts after that parent bar (`last_start`
+/// is before every child object), every child stroke may lie inside the
+/// parent's last stroke, so the cover starts before all of them.
 pub fn cover_from(parent: &Level, child_input: &[RawBar]) -> Option<NaiveDateTime> {
     let last = parent.strokes.last()?;
+    if child_input.first().is_some_and(|f| last.start_at < f.dt) {
+        return Some(NaiveDateTime::MIN);
+    }
     child_time(
         &parent.input,
         child_input,
