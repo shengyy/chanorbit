@@ -215,4 +215,4 @@ stdout carries only contract JSON, one object per line. stderr carries human-rea
 
 ## Versioning
 
-Each command has its own schema string; it changes when one of that command's fields is removed, renamed or changes meaning. Adding fields keeps it. `--version` and every response carry them; the package version is in `Cargo.toml`. Before the first release the schema strings are not bumped: they are fixed from the first release on.
+Each command has its own schema string; it changes when one of that command's fields is removed, renamed or changes meaning. Adding fields keeps it. `--version` and every response carry them; the package version is in `Cargo.toml`. Schemas are fixed: a downstream consumer locks a revision and checks the string, so a change in meaning always bumps it.
