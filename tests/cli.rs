@@ -333,7 +333,7 @@ fn levels_batch_matches_baselines_in_order() {
         .collect();
     assert_eq!(got.len(), cases.len() + 1);
     assert_eq!(got[1]["error"]["kind"], "invalid_request");
-    assert_eq!(got[1]["schema"], "chanorbit.levels/1");
+    assert_eq!(got[1]["schema"], "chanorbit.levels/2");
     assert_eq!(got[1]["id"], "bad");
     let answered = got.iter().take(1).chain(got.iter().skip(2));
     for (g, c) in answered.zip(&cases) {

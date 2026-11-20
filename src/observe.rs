@@ -63,7 +63,7 @@ pub struct StageFact {
     pub stage_age: Option<usize>,
     /// The available reverse candidate's end price is above the retest's high.
     pub beyond_start: bool,
-    /// A retained raw bar after the retest's end has a low below the retest's
+    /// A raw bar after the retest's end has a low below the retest's
     /// low: the retest's low no longer stands.
     pub retest_broken: bool,
 }

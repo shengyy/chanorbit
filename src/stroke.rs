@@ -100,7 +100,7 @@ impl Stroke {
             .collect()
     }
 
-    /// The start over the retained raw bars `raws` once this stroke follows a
+    /// The start over the raw bars `raws` once this stroke follows a
     /// stroke starting at `after`: the most extreme start-side raw price after
     /// `after` (without a stroke before, from this stroke's first raw bar) up
     /// to, not including, the end fractal's bar.

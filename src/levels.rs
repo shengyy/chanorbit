@@ -8,7 +8,7 @@ use crate::candidate::candidate_stroke;
 use crate::centre::{Centre, canonical_centres};
 use crate::geometry::{FractalFact, relation};
 use crate::levels_compare::Comparisons;
-use crate::macd::{MacdSeries, retained_macd};
+use crate::macd::{MacdSeries, raw_macd};
 use crate::power::{Power, interval_power, stroke_power};
 use crate::stroke::{Direction, extreme};
 use chrono::NaiveDateTime;
@@ -24,6 +24,8 @@ pub enum Pos {
     Unfinished,
     AfterExtreme,
     Extension,
+    /// The last stroke from its start to its extension's current extreme.
+    LastExtended,
     Tail,
 }
 
@@ -34,6 +36,7 @@ impl Serialize for Pos {
             Pos::Unfinished => s.serialize_str("unfinished"),
             Pos::AfterExtreme => s.serialize_str("after_extreme"),
             Pos::Extension => s.serialize_str("extension"),
+            Pos::LastExtended => s.serialize_str("last_extended"),
             Pos::Tail => s.serialize_str("tail"),
         }
     }
@@ -202,7 +205,7 @@ fn dedup_last(bars: &[RawBar]) -> Vec<RawBar> {
     out
 }
 
-/// Index range of retained raw bars with `start < dt <= end`.
+/// Index range of raw bars with `start < dt <= end`.
 fn rows(raw: &[RawBar], start: NaiveDateTime, end: NaiveDateTime) -> std::ops::Range<usize> {
     let a = raw.partition_point(|b| b.dt <= start);
     let b = raw.partition_point(|b| b.dt <= end);
@@ -302,7 +305,7 @@ impl Level {
     pub fn new(input: &[RawBar]) -> Self {
         let input = dedup_last(input);
         let analyzer = Analyzer::from_bars(input.iter().copied(), Config::default());
-        let macd = retained_macd(&analyzer);
+        let macd = raw_macd(&analyzer);
         Level {
             analyzer,
             macd,
@@ -499,6 +502,30 @@ impl Level {
         })
     }
 
+    /// An extending last stroke taken whole: from its start to the
+    /// extension's current extreme, the stroke it becomes once the extension
+    /// completes. Not an element of the sequence.
+    pub(crate) fn last_extended_seg(&self) -> Option<Seg> {
+        let extension = self.unfinished_seg().filter(|s| s.pos == Pos::Extension)?;
+        let last = self.seg(self.strokes.len() - 1);
+        Some(Seg {
+            pos: Pos::LastExtended,
+            start_at: last.start_at,
+            start_price: last.start_price,
+            ..extension
+        })
+    }
+
+    /// The segment a comparison or departure reads for `s`: an extending last
+    /// stroke, or its extension, is the last stroke taken whole.
+    pub(crate) fn whole(&self, s: Seg) -> Seg {
+        let last = Pos::Stroke(self.strokes.len() - 1);
+        match self.last_extended_seg() {
+            Some(e) if s.pos == last || s.pos == Pos::Extension => e,
+            _ => s,
+        }
+    }
+
     pub(crate) fn reverse_seg(&self) -> Option<Seg> {
         self.unfinished_seg().filter(|s| s.pos == Pos::Unfinished)
     }
@@ -631,7 +658,19 @@ impl Level {
             };
         };
         let j = containing(exit.dt);
-        let x = segs[j];
+        // A departure in the extending last stroke or its extension is that
+        // stroke taken whole when the stroke comes after the third member; it
+        // has no retest yet. A third member that is still extending belongs to
+        // the centre's formation, so its extension stays the departure.
+        let x = match next {
+            None if self.strokes.len() - 1 > third => self.whole(segs[j]),
+            _ => segs[j],
+        };
+        let departure_stroke = match x.pos {
+            Pos::Stroke(p) => Some(p),
+            Pos::LastExtended => Some(self.strokes.len() - 1),
+            _ => None,
+        };
         let retest = match x.pos {
             Pos::Stroke(_) => segs
                 .get(j + 1)
@@ -688,7 +727,7 @@ impl Level {
         // Beyond every member but the departure itself, at the endpoints the
         // centre's `dd`/`gg` are taken from; an equal price is not new.
         let others = (z.start - w0..z.end - w0)
-            .filter(|&i| Pos::Stroke(i) != x.pos)
+            .filter(|&i| Some(i) != departure_stroke)
             .map(|i| &self.strokes[i]);
         let new_extreme = extreme.filter(|_| toward_exit).map(|e| {
             if above {
@@ -703,7 +742,7 @@ impl Level {
             edge: if above { "zg" } else { "zd" },
             raw_extreme: extreme,
             new_extreme,
-            member: matches!(x.pos, Pos::Stroke(p) if p + w0 < z.end),
+            member: departure_stroke.is_some_and(|p| p + w0 < z.end),
             first_beyond_at: exit.dt,
             retest: retest.map(|r| r.pos),
             retest_extreme,

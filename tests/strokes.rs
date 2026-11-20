@@ -488,7 +488,7 @@ fn revisions_undo_endpoint_changes() {
 /// extreme among the unfinished fractals,
 /// the candidate leaves no raw price beyond the last end or its own, and the
 /// last stroke never returns to the stroke before it (an extending stroke is
-/// kept, not withdrawn). The first retained stroke is checked too.
+/// kept, not withdrawn). The first stroke is checked too.
 #[test]
 fn baselines_keep_endpoints_extreme_after_every_input() {
     let mut checked = 0;

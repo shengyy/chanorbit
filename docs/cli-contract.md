@@ -65,11 +65,11 @@ Every `dt` labels the **end** of its bar's period, and a bar still forming carri
 
 `stages`: one object with `schema` (`chanorbit.stages/2`), `id` (echo) and `stages` ([stages output](structure-contract.md#stages-output)).
 
-`levels`: one object with `schema` (`chanorbit.levels/1`), `id` (echo) and `levels` ([levels output](structure-contract.md#levels-output)). A complete example (illustrative values; the finest level has no `child`):
+`levels`: one object with `schema` (`chanorbit.levels/2`), `id` (echo) and `levels` ([levels output](structure-contract.md#levels-output)). A complete example (illustrative values; the finest level has no `child`):
 
 ```json
 {
-  "schema": "chanorbit.levels/1",
+  "schema": "chanorbit.levels/2",
   "id": "600000.SH@2026-11-16T11:00:00",
   "levels": [
     {
@@ -215,4 +215,4 @@ stdout carries only contract JSON, one object per line. stderr carries human-rea
 
 ## Versioning
 
-Each command has its own schema string; it changes when one of that command's fields is removed, renamed or changes meaning. Adding fields keeps it. `--version` and every response carry them; the package version is in `Cargo.toml`. Before the first release the schema strings are not bumped: they are fixed from the first release on.
+Each command has its own schema string; it changes when one of that command's fields is removed, renamed or changes meaning. Adding fields keeps it. `--version` and every response carry them; the package version is in `Cargo.toml`. Schemas are fixed: a downstream consumer locks a revision and checks the string, so a change in meaning always bumps it.

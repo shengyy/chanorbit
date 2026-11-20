@@ -4,7 +4,7 @@
 //! Only confirmed stages are produced; nothing here is a trading conclusion.
 use crate::analyzer::Analyzer;
 use crate::centre::{Centre, canonical_centres};
-use crate::macd::{MacdSeries, retained_macd};
+use crate::macd::{MacdSeries, raw_macd};
 use crate::power::stroke_power;
 use crate::stroke::{Direction, Stroke};
 use serde::{Deserialize, Serialize};
@@ -60,7 +60,7 @@ impl Evaluator<'_> {
 
     /// Negative MACD area of a stroke; `None` when unavailable.
     fn negative_area(&self, index: usize) -> Option<f64> {
-        let macd = self.macd.get_or_init(|| retained_macd(self.c));
+        let macd = self.macd.get_or_init(|| raw_macd(self.c));
         stroke_power(self.c, macd, &self.strokes()[index])
             .macd
             .negative_area
@@ -95,10 +95,9 @@ impl Evaluator<'_> {
             .then_some(FirstPoint { centre: z, entry })
     }
 
-    /// Every retained raw bar after stroke `begin` ends, up to the cutoff,
-    /// stays strictly above `boundary`. The cutoff is the last input when
-    /// `end` is the whole list, otherwise the end of stroke `end - 1`. Raw bars
-    /// the strokes or unfinished NewBars hold in that range must be retained.
+    /// Every raw bar after stroke `begin` ends, up to the cutoff, stays
+    /// strictly above `boundary`. The cutoff is the last input when `end` is
+    /// the whole list, otherwise the end of stroke `end - 1`.
     fn path_above(&self, end: usize, begin: usize, boundary: f64) -> bool {
         let (s, raw) = (self.strokes(), self.c.raw_bars());
         let start = s[begin].end_at();
@@ -109,22 +108,12 @@ impl Evaluator<'_> {
         }) else {
             return false;
         };
-        let held = |dt| raw.binary_search_by_key(&dt, |b| b.dt).is_ok();
-        if !held(start) || !held(cutoff) || cutoff < start {
+        if cutoff < start {
             return false;
         }
-        let covered = s[begin..end]
-            .iter()
-            .flat_map(|stroke| &stroke.newbars)
-            .chain(self.c.pending_bars())
-            .flat_map(|b| &b.elements)
+        raw.iter()
             .filter(|b| b.dt > start && b.dt <= cutoff)
-            .all(|b| held(b.dt));
-        covered
-            && raw
-                .iter()
-                .filter(|b| b.dt > start && b.dt <= cutoff)
-                .all(|b| b.low > boundary)
+            .all(|b| b.low > boundary)
     }
 
     /// Second stage whose retest is stroke `end - 1`.

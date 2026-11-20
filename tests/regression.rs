@@ -64,7 +64,7 @@ fn baselines_match_field_by_field() {
         let got = serde_json::to_value(respond(doc["request"]["id"].clone(), &c)).unwrap();
         diff.compare("response", &got, &doc["response"]);
 
-        // 3. Final NewBar detail and retained raw bars.
+        // 3. Final NewBar detail and raw bars.
         let detail = json!({
             "pending_newbars": c.pending_bars().iter().map(|b| newbar_full(b)).collect::<Vec<_>>(),
             "stroke_newbars": c.strokes().iter()

@@ -97,11 +97,7 @@ fn zero_continues_a_run_and_missing_closes_it() {
 /// revision equals feeding only the last version of each time.
 #[test]
 fn same_dt_revision_equals_single_input() {
-    for name in [
-        "daily_corrections.json.gz",
-        "f5_corrections.json.gz",
-        "daily_prune_max5.json.gz",
-    ] {
+    for name in ["daily_corrections.json.gz", "f5_corrections.json.gz"] {
         let path = common::golden_files()
             .into_iter()
             .find(|p| p.ends_with(name))
@@ -165,7 +161,7 @@ fn non_adjacent_repeated_time_is_rejected() {
 /// A NewBar keeps at most 101 raw bars: the first 100 and the latest. The
 /// first element (and so a fractal's `confirmed_at`) is never displaced; a
 /// raw price owner in the 101st slot is, which endpoints and the candidate
-/// do not see, because they read the retained raw bars.
+/// do not see, because they read the raw bars.
 #[test]
 fn newbar_element_cap() {
     let path = common::golden_files()
@@ -207,7 +203,7 @@ fn newbar_element_cap() {
         last.confirmed_at,
         top.elements[2].elements.first().map(|b| b.dt)
     );
-    // Endpoints and the candidate read retained raw bars, not NewBar elements.
+    // Endpoints and the candidate read the raw bars, not NewBar elements.
     assert_eq!(c.strokes().last().unwrap().end_at(), top.dt);
     assert_eq!(g.candidate_stroke.state, "available");
     assert_eq!(g.candidate_stroke.anchor_price_at, Some(top.dt));
@@ -301,4 +297,77 @@ fn request_must_be_an_object_within_the_length_limit() {
         Some("invalid_input"),
         "{text}"
     );
+}
+
+/// A synthetic zigzag of `legs` legs of 7 bars each with pseudo-random leg
+/// sizes and a slight upward drift, so centres form and close along it.
+fn zigzag(legs: usize) -> Vec<RawBar> {
+    let start = parse_dt("2026-01-05T09:35:00").unwrap();
+    let mut seed: u64 = 7;
+    let mut next = || {
+        seed = seed
+            .wrapping_mul(6364136223846793005)
+            .wrapping_add(1442695040888963407);
+        (seed >> 33) as f64 / (1u64 << 31) as f64
+    };
+    let cents = |x: f64| (x * 100.0).round() / 100.0;
+    let (mut price, mut bars) = (100.0_f64, Vec::new());
+    for leg in 0..legs {
+        let up = leg % 2 == 0;
+        let size = 2.0 + 6.0 * next() + if up { 0.3 } else { 0.0 };
+        for _ in 0..7 {
+            let from = price;
+            price += if up { size / 7.0 } else { -size / 7.0 };
+            bars.push(RawBar {
+                dt: start + chrono::Duration::minutes(5 * bars.len() as i64),
+                high: cents(from.max(price) + 0.05),
+                low: cents(from.min(price) - 0.05),
+                close: cents(price),
+                vol: 100.0,
+            });
+        }
+    }
+    bars
+}
+
+/// The caller owns the window: appending bars that do not revise earlier
+/// strokes leaves every earlier stroke (power included), every closed centre
+/// and every stroke index unchanged, also past 50 strokes.
+#[test]
+fn appending_keeps_earlier_strokes_centres_and_indices() {
+    let mut c = Analyzer::new(chanorbit::Config::default());
+    let mut before = geometry(&c);
+    for bar in zigzag(160) {
+        c.update(bar);
+        let after = geometry(&c);
+        let kept = before
+            .strokes
+            .iter()
+            .zip(&after.strokes)
+            .take_while(|(a, b)| a == b)
+            .count();
+        assert!(
+            kept + 2 >= before.strokes.len(),
+            "earlier strokes revised at {}",
+            bar.dt
+        );
+        let closed = before.centre_sequence.len().saturating_sub(1);
+        for (i, centre) in before.centre_sequence[..closed].iter().enumerate() {
+            if centre.member_indices.iter().all(|&m| m + 1 < kept) {
+                assert_eq!(
+                    Some(centre),
+                    after.centre_sequence.get(i),
+                    "centre {i} at {}",
+                    bar.dt
+                );
+            }
+        }
+        before = after;
+    }
+    let centres = before
+        .centre_sequence
+        .iter()
+        .filter(|z| z.member_count >= 3);
+    assert!(c.strokes().len() > 60, "{} strokes", c.strokes().len());
+    assert!(centres.count() >= 3);
 }

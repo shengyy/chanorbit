@@ -84,7 +84,7 @@ impl Level {
         }
     }
 
-    /// Retained raw bars from `from` to `to`, both included.
+    /// Raw bars from `from` to `to`, both included.
     fn between(&self, from: NaiveDateTime, to: NaiveDateTime) -> Between {
         let raw = self.raw();
         let a = raw.partition_point(|b| b.dt < from);
@@ -122,7 +122,13 @@ impl Level {
             return None;
         };
         let sequence = self.sequence();
-        let get = |p: &Pos| sequence.iter().find(|s| s.pos == *p).copied();
+        let get = |p: &Pos| {
+            sequence
+                .iter()
+                .copied()
+                .chain(self.last_extended_seg())
+                .find(|s| s.pos == *p)
+        };
         let dep = get(departure)?;
         let exit_up = *edge == "zg";
         if (dep.direction == Direction::Up) != exit_up {
@@ -159,7 +165,7 @@ impl Level {
             }) = retest
             {
                 let advance = (k + 1..n)
-                    .map(|p| self.seg(p))
+                    .map(|p| self.whole(self.seg(p)))
                     .chain(self.reverse_seg())
                     .find(|s| s.direction == dep.direction);
                 if let Some(a) = advance {
