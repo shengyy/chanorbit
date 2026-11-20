@@ -15,7 +15,7 @@ pub const SCHEMA: &str = "chanorbit.geometry/1";
 /// Output contract version of `stages`.
 pub const STAGES_SCHEMA: &str = "chanorbit.stages/2";
 /// Output contract version of `levels`.
-pub const LEVELS_SCHEMA: &str = "chanorbit.levels/1";
+pub const LEVELS_SCHEMA: &str = "chanorbit.levels/2";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Command {

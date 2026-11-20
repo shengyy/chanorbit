@@ -65,11 +65,11 @@ Every `dt` labels the **end** of its bar's period, and a bar still forming carri
 
 `stages`: one object with `schema` (`chanorbit.stages/2`), `id` (echo) and `stages` ([stages output](structure-contract.md#stages-output)).
 
-`levels`: one object with `schema` (`chanorbit.levels/1`), `id` (echo) and `levels` ([levels output](structure-contract.md#levels-output)). A complete example (illustrative values; the finest level has no `child`):
+`levels`: one object with `schema` (`chanorbit.levels/2`), `id` (echo) and `levels` ([levels output](structure-contract.md#levels-output)). A complete example (illustrative values; the finest level has no `child`):
 
 ```json
 {
-  "schema": "chanorbit.levels/1",
+  "schema": "chanorbit.levels/2",
   "id": "600000.SH@2026-11-16T11:00:00",
   "levels": [
     {
