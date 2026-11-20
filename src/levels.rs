@@ -8,7 +8,7 @@ use crate::candidate::candidate_stroke;
 use crate::centre::{Centre, canonical_centres};
 use crate::geometry::{FractalFact, relation};
 use crate::levels_compare::Comparisons;
-use crate::macd::{MacdSeries, retained_macd};
+use crate::macd::{MacdSeries, raw_macd};
 use crate::power::{Power, interval_power, stroke_power};
 use crate::stroke::{Direction, extreme};
 use chrono::NaiveDateTime;
@@ -202,7 +202,7 @@ fn dedup_last(bars: &[RawBar]) -> Vec<RawBar> {
     out
 }
 
-/// Index range of retained raw bars with `start < dt <= end`.
+/// Index range of raw bars with `start < dt <= end`.
 fn rows(raw: &[RawBar], start: NaiveDateTime, end: NaiveDateTime) -> std::ops::Range<usize> {
     let a = raw.partition_point(|b| b.dt <= start);
     let b = raw.partition_point(|b| b.dt <= end);
@@ -302,7 +302,7 @@ impl Level {
     pub fn new(input: &[RawBar]) -> Self {
         let input = dedup_last(input);
         let analyzer = Analyzer::from_bars(input.iter().copied(), Config::default());
-        let macd = retained_macd(&analyzer);
+        let macd = raw_macd(&analyzer);
         Level {
             analyzer,
             macd,

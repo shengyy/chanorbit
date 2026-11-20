@@ -30,7 +30,6 @@ pub fn load(path: &Path) -> Value {
 pub fn input(doc: &Value) -> (Vec<RawBar>, Config) {
     let req: Request = serde_json::from_value(doc["request"].clone()).unwrap();
     let config = Config {
-        max_strokes: doc["config"]["max_strokes"].as_u64().unwrap() as usize,
         min_stroke_bars: doc["config"]["min_stroke_bars"].as_u64().unwrap() as usize,
     };
     (req.bars().unwrap(), config)

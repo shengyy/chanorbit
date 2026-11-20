@@ -1,11 +1,11 @@
-//! MACD(12, 26, 9) over retained raw closes: SMA-seeded EMAs, hist = DIF - DEA.
+//! MACD(12, 26, 9) over raw closes: SMA-seeded EMAs, hist = DIF - DEA.
 use crate::analyzer::Analyzer;
 
 pub const PARAMS: [usize; 3] = [12, 26, 9];
 /// Bars before the first finite histogram value: 26 - 1 + 9 - 1 + 1.
 pub const LOOKBACK: usize = 33;
 
-/// One value per retained raw bar; NaN before warm-up.
+/// One value per raw bar; NaN before warm-up.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct MacdSeries {
     pub dif: Vec<f64>,
@@ -71,8 +71,8 @@ pub fn macd_series(series: &[f64], short: usize, long: usize, m: usize) -> MacdS
     out
 }
 
-/// MACD(12, 26, 9) of the analyzer's retained raw bars.
-pub fn retained_macd(c: &Analyzer) -> MacdSeries {
+/// MACD(12, 26, 9) of the analyzer's raw bars.
+pub fn raw_macd(c: &Analyzer) -> MacdSeries {
     let closes: Vec<f64> = c.raw_bars().iter().map(|b| b.close).collect();
     let [short, long, m] = PARAMS;
     macd_series(&closes, short, long, m)

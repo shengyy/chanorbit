@@ -4,13 +4,13 @@ use crate::analyzer::Analyzer;
 use crate::candidate::{CandidateStroke, candidate_stroke};
 use crate::centre::canonical_centres;
 use crate::fractal::{Fractal, Mark};
-use crate::macd::retained_macd;
+use crate::macd::raw_macd;
 use crate::power::{MacdFacts, Power, interval_power, stroke_power};
 use crate::stroke::Direction;
 use chrono::NaiveDateTime;
 use serde::{Deserialize, Serialize};
 
-/// One retained stroke with its interval power.
+/// One stroke with its interval power.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct StrokeFact {
     pub direction: Direction,
@@ -109,7 +109,7 @@ pub(crate) fn relation(al: f64, ah: f64, bl: f64, bh: f64) -> String {
 }
 
 pub fn geometry(c: &Analyzer) -> Geometry {
-    let macd = retained_macd(c);
+    let macd = raw_macd(c);
     let strokes = c.strokes();
     let finished = c.finished_count();
     let stroke_facts = strokes

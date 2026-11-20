@@ -1,4 +1,4 @@
-//! Raw-interval power over `(start_at, end_at]` and the retained MACD view.
+//! Raw-interval power over `(start_at, end_at]` and the MACD view.
 use crate::analyzer::Analyzer;
 use crate::macd::{LOOKBACK, MacdSeries};
 use crate::stroke::Stroke;
@@ -24,13 +24,13 @@ pub struct PowerMacd {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Power {
-    /// Retained raw bars with `start_at < dt <= end_at`.
+    /// Raw bars with `start_at < dt <= end_at`.
     pub sample_count: usize,
     pub mean_volume: Option<f64>,
     pub macd: PowerMacd,
 }
 
-/// Power over retained raw bars with `start < dt <= end`. Missing endpoints or
+/// Power over raw bars with `start < dt <= end`. Missing endpoints or
 /// non-increasing times mean `missing_coverage`; any non-finite close up to
 /// `end` means `non_finite`; unready rows before [`LOOKBACK`] mean `warmup`.
 /// Unavailable areas are `None`, never 0.
@@ -123,25 +123,9 @@ pub fn interval_power(
     }
 }
 
-/// Stroke power; a raw bar the stroke snapshot holds inside `(start_at, end_at]` that
-/// is no longer retained makes areas and the mean volume unavailable.
+/// Stroke power over `(start_at, end_at]`.
 pub fn stroke_power(c: &Analyzer, s: &MacdSeries, stroke: &Stroke) -> Power {
-    let mut power = interval_power(c, s, stroke.start_at(), stroke.end_at());
-    let raw = c.raw_bars();
-    let missing = stroke
-        .newbars
-        .iter()
-        .flat_map(|b| &b.elements)
-        .filter(|b| b.dt > stroke.start_at() && b.dt <= stroke.end_at())
-        .any(|b| raw.binary_search_by_key(&b.dt, |r| r.dt).is_err());
-    if missing {
-        power.macd.status = "unavailable".into();
-        power.macd.reason = Some("missing_coverage".into());
-        power.macd.positive_area = None;
-        power.macd.negative_area = None;
-        power.mean_volume = None;
-    }
-    power
+    interval_power(c, s, stroke.start_at(), stroke.end_at())
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -165,7 +149,7 @@ pub struct MacdSegment {
     pub peak_at: NaiveDateTime,
 }
 
-/// MACD of every retained raw bar and its histogram segments.
+/// MACD of every raw bar and its histogram segments.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct MacdFacts {
     pub bars: Vec<MacdBar>,

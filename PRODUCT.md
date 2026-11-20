@@ -9,7 +9,7 @@ chanOrbit computes Chan-theory stroke structure from a bar sequence and returns 
 | Bars | Columnar exchange-local naive wall-clock bars (`dt`, `high`, `low`, `close`, `vol`) of any period; same-time revisions of the latest bar |
 | Inclusion | NewBar merge with direction from the previous two NewBars |
 | Fractals | Alternating tops and bottoms with price and confirmation time |
-| Strokes | Stroke search, endpoints at raw extremes, extension and retention of the latest strokes |
+| Strokes | Stroke search, endpoints at raw extremes, extension, over the whole request window |
 | Centres | Canonical stroke-centre partition over the finished strokes |
 | Power | MACD(12, 26, 9) and per-interval histogram areas, end values, sample counts and mean volume |
 | Candidate | Display-only candidate segment after the last stroke, with its power windows |

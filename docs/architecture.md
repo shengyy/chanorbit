@@ -9,9 +9,9 @@ One crate, `chanorbit`: a library (`src/lib.rs`) holding the engine and the JSON
 | `bar` | `RawBar`, `NewBar` and the inclusion merge |
 | `fractal` | `Mark`, `Fractal`, detection, `confirmed_at` |
 | `stroke` | `Direction`, `Stroke`, its raw endpoints, reopening and the single-stroke search over a NewBar window |
-| `analyzer` | `Analyzer`: per-bar update, first stroke, extension, appending with linked endpoints, retention, same-dt revision, finished strokes, fractal list, unfinished direction |
+| `analyzer` | `Analyzer`: per-bar update, first stroke, extension, appending with linked endpoints, same-dt revision, finished strokes, fractal list, unfinished direction |
 | `centre` | `Centre` geometry, the touch rule and the canonical centre sequence |
-| `macd` | MACD(12, 26, 9) series over retained closes |
+| `macd` | MACD(12, 26, 9) series over the raw closes |
 | `power` | Interval power, stroke power, MACD bars and segments |
 | `candidate` | Candidate stroke after the last stroke |
 | `geometry` | The geometry snapshot: stroke facts, fractal window, centre sequence and indices, relation, candidate power |
@@ -29,7 +29,6 @@ One crate, `chanorbit`: a library (`src/lib.rs`) holding the engine and the JSON
 columnar request ─► contract::run ─► RawBar ─► Analyzer::update (per bar)
                                                   │  inclusion ─► NewBar window
                                                   │  stroke search / extension / linking ─► strokes
-                                                  │  retention pruning
                                                   ▼
                          geometry::geometry: strokes + power, fractals, centres,
                                              candidate + power, MACD ─► geometry response
@@ -43,9 +42,9 @@ levels request ─► contract::run_levels ─► per level, coarsest first: Ana
                   per parent/child pair: levels_child child times, points, forces, zones ─► levels response
 ```
 
-Strokes, fractals and the unfinished window share NewBars through `Arc`: a merge replaces the last NewBar with a new allocation, so earlier snapshots stay immutable. The undo record for same-dt revision holds only the latest input's prior window, removed stroke and pruned items.
+Strokes, fractals and the unfinished window share NewBars through `Arc`: a merge replaces the last NewBar with a new allocation, so earlier snapshots stay immutable. The undo record for same-dt revision holds only the latest input's prior window and the strokes it changed or removed. Nothing is pruned: strokes and raw bars cover the whole request.
 
-The stages reuse the same objects: `Analyzer` per-input state, `centre::canonical_centres`, `candidate::candidate_stroke`, `macd::retained_macd` (computed lazily, only when a first point's geometry holds) and `power::stroke_power`. `stages` replays the request through one analyzer and evaluates after every observed input; it does not call `geometry`.
+The stages reuse the same objects: `Analyzer` per-input state, `centre::canonical_centres`, `candidate::candidate_stroke`, `macd::raw_macd` (computed lazily, only when a first point's geometry holds) and `power::stroke_power`. `stages` replays the request through one analyzer and evaluates after every observed input; it does not call `geometry`.
 
 Every input clones the pending window and repeats the fractal scan and stroke search over it. While a stroke keeps forming the window stays short; a series that forms no stroke for its whole length makes the work grow quadratically with its length (tens of thousands of bars take seconds). Each input also rescans the raw bars after the last stroke's end for its extension, so a long run that neither extends the last stroke nor forms a new one grows the same way (32,000 one-price bars after a stroke: 0.03 s in 0.1.1, 0.6 s now; a 1,920-bar window stays under 10 ms). This is the current state and is bounded only by the request length limit.
 

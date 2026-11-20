@@ -1,29 +1,25 @@
-//! Incremental analyzer: inclusion, stroke search and extension, retention and
-//! same-dt tail revision. Batch construction is the same per-bar loop.
+//! Incremental analyzer: inclusion, stroke search and extension and same-dt
+//! tail revision over every input bar. Batch construction is the same per-bar
+//! loop.
 use crate::bar::{NewBar, RawBar, merge_inclusion};
 use crate::fractal::{Fractal, scan_fractals};
 use crate::stroke::{Direction, Endpoint, Stroke, beyond, extreme, find_stroke};
 use std::sync::Arc;
 
-/// Stroke parameters. Defaults: 50 strokes, 6 NewBars.
+/// Stroke parameters. Default: 6 NewBars.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Config {
-    /// Maximum retained strokes; older strokes and their raw bars are dropped.
-    pub max_strokes: usize,
     /// Minimum NewBar count of a stroke.
     pub min_stroke_bars: usize,
 }
 
 impl Default for Config {
     fn default() -> Self {
-        Self {
-            max_strokes: 50,
-            min_stroke_bars: 6,
-        }
+        Self { min_stroke_bars: 6 }
     }
 }
 
-/// Undo record for exactly the latest input, including retention pruning.
+/// Undo record for exactly the latest input.
 #[derive(Debug, Clone, Default)]
 struct TailUpdate {
     pending_bars: Vec<Arc<NewBar>>,
@@ -31,8 +27,6 @@ struct TailUpdate {
     /// `revised` holds them as they were before it.
     revised_from: usize,
     revised: Vec<Stroke>,
-    pruned_strokes: Vec<Stroke>,
-    pruned_raw: Vec<RawBar>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -61,7 +55,7 @@ impl Analyzer {
         analyzer
     }
 
-    /// Retained raw bars (pruned to the first retained stroke's start).
+    /// Every input raw bar (the last version of each `dt`).
     pub fn raw_bars(&self) -> &[RawBar] {
         &self.raw_bars
     }
@@ -71,7 +65,7 @@ impl Analyzer {
         &self.pending_bars
     }
 
-    /// Retained strokes; the last one may still be extended.
+    /// Every stroke, oldest first; the last one may still be extended.
     pub fn strokes(&self) -> &[Stroke] {
         &self.strokes
     }
@@ -96,11 +90,9 @@ impl Analyzer {
         if self.raw_bars.last().is_some_and(|last| last.dt == bar.dt) {
             let previous = std::mem::take(&mut self.tail);
             self.pending_bars = previous.pending_bars;
-            self.strokes.splice(0..0, previous.pruned_strokes);
             self.strokes.truncate(previous.revised_from);
             self.strokes.extend(previous.revised);
             self.raw_bars.pop();
-            self.raw_bars.splice(0..0, previous.pruned_raw);
         }
         self.tail = TailUpdate {
             pending_bars: self.pending_bars.clone(),
@@ -123,15 +115,6 @@ impl Analyzer {
         }
 
         self.update_strokes();
-        if self.strokes.len() > self.config.max_strokes {
-            let excess = self.strokes.len() - self.config.max_strokes;
-            self.tail.pruned_strokes = self.strokes.drain(..excess).collect();
-        }
-        if let Some(first) = self.strokes.first() {
-            let start_at = first.start.at.min(first.start_fractal.elements[0].dt);
-            let keep_from = self.raw_bars.partition_point(|b| b.dt < start_at);
-            self.tail.pruned_raw = self.raw_bars.drain(..keep_from).collect();
-        }
     }
 
     /// Record strokes from `i` on before this input changes or removes them.
