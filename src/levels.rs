@@ -3,16 +3,17 @@
 //! with their state, and same-direction comparisons. Definitions are owned by
 //! `docs/structure-contract.md#levels`.
 use crate::analyzer::{Analyzer, Config};
-use crate::bar::RawBar;
+use crate::bar::{NewBar, RawBar};
 use crate::candidate::candidate_stroke;
 use crate::centre::{Centre, canonical_centres};
 use crate::geometry::{FractalFact, relation};
 use crate::levels_compare::Comparisons;
 use crate::macd::{MacdSeries, raw_macd};
-use crate::power::{Power, interval_power, stroke_power};
-use crate::stroke::{Direction, extreme};
+use crate::power::{Power, interval_power};
+use crate::stroke::{Direction, Stroke, extreme};
 use chrono::NaiveDateTime;
 use serde::{Serialize, Serializer};
+use std::sync::Arc;
 
 /// Centres listed per level: the latest qualified one and up to four before it.
 pub const LISTED_CENTRES: usize = 5;
@@ -23,10 +24,6 @@ pub enum Pos {
     Stroke(usize),
     Unfinished,
     AfterExtreme,
-    Extension,
-    /// The last stroke from its start to its extension's current extreme.
-    LastExtended,
-    Tail,
 }
 
 impl Serialize for Pos {
@@ -35,9 +32,6 @@ impl Serialize for Pos {
             Pos::Stroke(i) => s.serialize_u64(*i as u64),
             Pos::Unfinished => s.serialize_str("unfinished"),
             Pos::AfterExtreme => s.serialize_str("after_extreme"),
-            Pos::Extension => s.serialize_str("extension"),
-            Pos::LastExtended => s.serialize_str("last_extended"),
-            Pos::Tail => s.serialize_str("tail"),
         }
     }
 }
@@ -72,7 +66,6 @@ pub struct LevelStroke {
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct Unfinished {
-    pub kind: String,
     pub direction: Direction,
     pub anchor_at: NaiveDateTime,
     pub anchor_price: f64,
@@ -186,6 +179,8 @@ pub struct Level {
     /// Retained stroke index of window position 0.
     pub window_start: usize,
     pub strokes: Vec<LevelStroke>,
+    /// The last window stroke is extending: it is read to its current extreme.
+    pub last_stroke_extending: bool,
     pub unfinished: Option<Unfinished>,
     pub after_extreme: Option<AfterExtreme>,
     pub centres: Vec<LevelCentre>,
@@ -270,6 +265,28 @@ fn dif_extreme(
     })
 }
 
+/// Position of the NewBar holding the raw bar at `at` (the first whose last
+/// element is at or after it).
+fn holding(bars: &[Arc<NewBar>], at: NaiveDateTime) -> usize {
+    bars.iter()
+        .position(|b| b.elements.last().is_some_and(|r| r.dt >= at))
+        .unwrap_or(bars.len().saturating_sub(1))
+}
+
+/// The unfinished NewBars a stroke ending at `at` would leave: from its end
+/// fractal's first NewBar (the one before the NewBar holding `at`) on, as the
+/// finished rule counts them once the stroke ends there.
+fn newbars_from_end(pending: &[Arc<NewBar>], at: NaiveDateTime) -> usize {
+    pending.len() - holding(pending, at).saturating_sub(1)
+}
+
+/// NewBars of the extending last stroke ending at `at`: from its first
+/// NewBar to the one after the NewBar holding `at`, those that exist.
+fn extended_newbars(last: &Stroke, pending: &[Arc<NewBar>], at: NaiveDateTime) -> usize {
+    let window = last.reopen(pending);
+    (holding(&window, at) + 2).min(window.len())
+}
+
 /// This centre (`a`) versus the next (`b`): `above` when `a` lies above `b`.
 fn versus(a: &Centre, b: &Centre) -> Versus {
     Versus {
@@ -312,6 +329,7 @@ impl Level {
             input,
             window_start: 0,
             strokes: Vec::new(),
+            last_stroke_extending: false,
             unfinished: None,
             after_extreme: None,
             centres: Vec::new(),
@@ -336,8 +354,24 @@ impl Level {
         if all.is_empty() {
             return;
         }
-        let finished = c.finished_count();
-        let fs = &all[..finished];
+        let n = all.len();
+        // An extending last stroke is that stroke, not yet ended: it is read
+        // to its current extreme, and is finished as a stroke ending there is.
+        let extension = c.extension();
+        let finished = match extension {
+            Some(x) => n - 1 + usize::from(newbars_from_end(c.pending_bars(), x.at) >= 5),
+            None => c.finished_count(),
+        };
+        let extended: Vec<Stroke>;
+        let fs: &[Stroke] = match extension {
+            Some(x) if finished == n => {
+                let mut read = all.to_vec();
+                read[n - 1].end = x;
+                extended = read;
+                &extended
+            }
+            _ => &all[..finished],
+        };
         let sequence = canonical_centres(fs);
         let qualified: Vec<Centre> = sequence
             .iter()
@@ -347,28 +381,37 @@ impl Level {
         let listed = &qualified[qualified.len().saturating_sub(LISTED_CENTRES)..];
         let mut w0 = listed.first().map_or(0, |z| z.start - 1);
         if let Some(t) = cover_from {
-            let first_after = all.iter().position(|s| s.end_at() > t).unwrap_or(all.len());
-            w0 = w0.min(first_after.min(all.len() - 1));
+            let first_after = all.iter().position(|s| s.end_at() > t).unwrap_or(n);
+            w0 = w0.min(first_after.min(n - 1));
         }
         self.window_start = w0;
+        self.last_stroke_extending = extension.is_some();
         let raw = c.raw_bars();
         let macd = &self.macd;
-        self.strokes = all[w0..]
-            .iter()
-            .enumerate()
-            .map(|(k, s)| LevelStroke {
-                direction: s.direction,
-                start_at: s.start_at(),
-                end_at: s.end_at(),
-                start_price: s.start.price,
-                end_price: s.end.price,
-                high: s.high(),
-                low: s.low(),
-                newbar_count: s.newbar_count(),
-                finished: w0 + k < finished,
-                raw_extreme: raw_extreme(raw, s.direction, s.start_at(), s.end_at()),
-                dif_extreme: dif_extreme(raw, macd, s.direction, s.start_at(), s.end_at()),
-                power: stroke_power(c, macd, s),
+        self.strokes = (w0..n)
+            .map(|k| {
+                let s = &all[k];
+                let (start, end) = match extension {
+                    Some(x) if k + 1 == n => (s.start, x),
+                    _ => (s.start, s.end),
+                };
+                LevelStroke {
+                    direction: s.direction,
+                    start_at: start.at,
+                    end_at: end.at,
+                    start_price: start.price,
+                    end_price: end.price,
+                    high: start.price.max(end.price),
+                    low: start.price.min(end.price),
+                    newbar_count: match extension {
+                        Some(x) if k + 1 == n => extended_newbars(s, c.pending_bars(), x.at),
+                        _ => s.newbar_count(),
+                    },
+                    finished: k < finished,
+                    raw_extreme: raw_extreme(raw, s.direction, start.at, end.at),
+                    dif_extreme: dif_extreme(raw, macd, s.direction, start.at, end.at),
+                    power: interval_power(c, macd, start.at, end.at),
+                }
             })
             .collect();
         let since = all[w0].start_at();
@@ -379,45 +422,53 @@ impl Level {
             .map(FractalFact::from)
             .collect();
         let candidate = candidate_stroke(c);
-        let last_dt = raw.last().map(|b| b.dt);
+        let last = self
+            .strokes
+            .last()
+            .expect("the window holds the last stroke");
+        // The path after the extreme follows the last element: the unfinished
+        // reverse segment, otherwise the last stroke as read.
+        let mut path_from = (last.direction.opposite(), last.end_at, last.end_price);
         if candidate.state == "available"
-            && let (Some(kind), Some(d), Some(a), Some(ap), Some(e), Some(et), Some(last)) = (
-                candidate.kind.clone(),
+            && candidate.kind.as_deref() == Some("reverse")
+            && let (Some(d), Some(a), Some(ap), Some(e), Some(et), Some(last)) = (
                 candidate.direction,
                 candidate.anchor_at,
                 candidate.anchor_price,
                 candidate.end_price,
                 candidate.end_price_at,
-                last_dt,
+                raw.last(),
             )
         {
             self.unfinished = Some(Unfinished {
-                kind,
                 direction: d,
                 anchor_at: a,
                 anchor_price: ap,
                 end_price: e,
                 end_price_at: et,
-                bars_after_extreme: rows(raw, et, last).len(),
+                bars_after_extreme: rows(raw, et, last.dt).len(),
                 raw_extreme: raw_extreme(raw, d, a, et),
                 dif_extreme: dif_extreme(raw, macd, d, a, et),
                 power: interval_power(c, macd, a, et),
             });
-            let pd = d.opposite();
-            if let Some(x) = raw_extreme(raw, pd, et, last) {
-                self.after_extreme = Some(AfterExtreme {
-                    direction: pd,
-                    start_at: et,
-                    start_price: e,
-                    end_at: last,
-                    raw_extreme: x,
-                    bar_count: rows(raw, et, last).len(),
-                    dif_extreme: dif_extreme(raw, macd, pd, et, last),
-                    power: interval_power(c, macd, et, last),
-                });
-            }
+            path_from = (d.opposite(), et, e);
         }
-        let last_index = all.len() - 1;
+        let (pd, et, e) = path_from;
+        if let Some(last) = raw.last()
+            && let Some(x) = raw_extreme(raw, pd, et, last.dt)
+        {
+            self.after_extreme = Some(AfterExtreme {
+                direction: pd,
+                start_at: et,
+                start_price: e,
+                end_at: last.dt,
+                raw_extreme: x,
+                bar_count: rows(raw, et, last.dt).len(),
+                dif_extreme: dif_extreme(raw, macd, pd, et, last.dt),
+                power: interval_power(c, macd, et, last.dt),
+            });
+        }
+        let last_index = n - 1;
         self.membership = match listed.last() {
             None => Membership {
                 member: false,
@@ -487,47 +538,16 @@ impl Level {
         }
     }
 
+    /// The unfinished reverse segment.
     pub fn unfinished_seg(&self) -> Option<Seg> {
         self.unfinished.as_ref().map(|u| Seg {
-            pos: if u.kind == "reverse" {
-                Pos::Unfinished
-            } else {
-                Pos::Extension
-            },
+            pos: Pos::Unfinished,
             direction: u.direction,
             start_at: u.anchor_at,
             end_at: u.end_price_at,
             start_price: u.anchor_price,
             end_price: u.end_price,
         })
-    }
-
-    /// An extending last stroke taken whole: from its start to the
-    /// extension's current extreme, the stroke it becomes once the extension
-    /// completes. Not an element of the sequence.
-    pub(crate) fn last_extended_seg(&self) -> Option<Seg> {
-        let extension = self.unfinished_seg().filter(|s| s.pos == Pos::Extension)?;
-        let last = self.seg(self.strokes.len() - 1);
-        Some(Seg {
-            pos: Pos::LastExtended,
-            start_at: last.start_at,
-            start_price: last.start_price,
-            ..extension
-        })
-    }
-
-    /// The segment a comparison or departure reads for `s`: an extending last
-    /// stroke, or its extension, is the last stroke taken whole.
-    pub(crate) fn whole(&self, s: Seg) -> Seg {
-        let last = Pos::Stroke(self.strokes.len() - 1);
-        match self.last_extended_seg() {
-            Some(e) if s.pos == last || s.pos == Pos::Extension => e,
-            _ => s,
-        }
-    }
-
-    pub(crate) fn reverse_seg(&self) -> Option<Seg> {
-        self.unfinished_seg().filter(|s| s.pos == Pos::Unfinished)
     }
 
     pub(crate) fn after_seg(&self) -> Option<Seg> {
@@ -541,36 +561,23 @@ impl Level {
         })
     }
 
-    /// Raw bars after everything above, when no candidate covers them.
-    fn tail_seg(&self) -> Option<Seg> {
-        let raw = self.raw();
-        let last = raw.last()?;
-        let stroke = self.strokes.last()?;
-        let covered = [self.unfinished_seg(), self.after_seg()]
-            .into_iter()
-            .flatten()
-            .map(|s| s.end_at)
-            .fold(stroke.end_at, NaiveDateTime::max);
-        let d = stroke.direction.opposite();
-        let x = raw_extreme(raw, d, covered, last.dt)?;
-        Some(Seg {
-            pos: Pos::Tail,
-            direction: d,
-            start_at: covered,
-            end_at: last.dt,
-            start_price: stroke.end_price,
-            end_price: x.price,
-        })
+    /// Whether `s` is still moving: the extending last stroke, the unfinished
+    /// segment or the path after the extreme.
+    pub(crate) fn moving(&self, s: &Seg) -> bool {
+        match s.pos {
+            Pos::Stroke(k) => self.last_stroke_extending && k + 1 == self.strokes.len(),
+            _ => true,
+        }
     }
 
-    /// Every segment and path of the level in time order: window strokes,
-    /// the unfinished segment, the path after its extreme, the tail.
+    /// Every element of the level in time order: window strokes (the last
+    /// one to its current extreme), the unfinished segment, the path after
+    /// the extreme.
     pub(crate) fn sequence(&self) -> Vec<Seg> {
         (0..self.strokes.len())
             .map(|k| self.seg(k))
             .chain(self.unfinished_seg())
             .chain(self.after_seg())
-            .chain(self.tail_seg())
             .collect()
     }
 
@@ -658,17 +665,9 @@ impl Level {
             };
         };
         let j = containing(exit.dt);
-        // A departure in the extending last stroke or its extension is that
-        // stroke taken whole when the stroke comes after the third member; it
-        // has no retest yet. A third member that is still extending belongs to
-        // the centre's formation, so its extension stays the departure.
-        let x = match next {
-            None if self.strokes.len() - 1 > third => self.whole(segs[j]),
-            _ => segs[j],
-        };
+        let x = segs[j];
         let departure_stroke = match x.pos {
             Pos::Stroke(p) => Some(p),
-            Pos::LastExtended => Some(self.strokes.len() - 1),
             _ => None,
         };
         let retest = match x.pos {

@@ -30,8 +30,6 @@ pub struct Point {
 pub struct Points {
     pub last_stroke: Option<Point>,
     pub unfinished: Option<Point>,
-    /// The current extreme of an extending last stroke.
-    pub extension: Option<Point>,
     pub after_extreme: Option<Point>,
 }
 
@@ -90,6 +88,8 @@ pub struct LevelOut {
     pub status: &'static str,
     pub last_input_at: NaiveDateTime,
     pub strokes: Vec<LevelStroke>,
+    /// `null` without strokes.
+    pub last_stroke_extending: Option<bool>,
     pub unfinished: Option<Unfinished>,
     pub after_extreme: Option<AfterExtreme>,
     pub fractals: Vec<FractalFact>,
@@ -137,7 +137,7 @@ fn up(d: Direction) -> bool {
 fn child_segments(c: &Level) -> Vec<Seg> {
     (0..c.strokes.len())
         .map(|k| c.seg(k))
-        .chain(c.reverse_seg())
+        .chain(c.unfinished_seg())
         .collect()
 }
 
@@ -294,7 +294,7 @@ fn boundaries(parent: &Level, child: &Level) -> Result<Boundaries, &'static str>
         "last_start_no_child_bar",
     )?;
     let last_end = time(last.end_at, up(last.direction), "last_end_no_child_bar")?;
-    let unfinished = parent.reverse_seg();
+    let unfinished = parent.unfinished_seg();
     let unfinished_extreme = match unfinished {
         Some(u) => time(u.end_at, up(u.direction), "unfinished_extreme_no_child_bar")?,
         None => None,
@@ -332,7 +332,7 @@ fn zones(child: &Level, z: &Boundaries) -> Vec<Placed> {
         .enumerate()
         .map(|(k, s)| ("stroke", Some(k), s.start_at, s.end_at))
         .collect();
-    if let Some(u) = child.reverse_seg() {
+    if let Some(u) = child.unfinished_seg() {
         spans.push(("unfinished", None, u.start_at, u.end_at));
     }
     if let Some(p) = &child.after_extreme {
@@ -383,17 +383,10 @@ fn child_of(parent: &Level, child: &Level, name: &str) -> Child {
             let x = s.raw_extreme?;
             Some(point(parent, child, &segs, s.direction, x.at, x.price))
         }),
-        unfinished: parent.reverse_seg().and_then(|u| {
+        unfinished: parent.unfinished_seg().and_then(|u| {
             let x = parent.unfinished.as_ref()?.raw_extreme?;
             Some(point(parent, child, &segs, u.direction, x.at, x.price))
         }),
-        extension: parent
-            .unfinished_seg()
-            .filter(|u| u.pos == Pos::Extension)
-            .and_then(|u| {
-                let x = parent.unfinished.as_ref()?.raw_extreme?;
-                Some(point(parent, child, &segs, u.direction, x.at, x.price))
-            }),
         after_extreme: parent.after_extreme.as_ref().map(|p| {
             let x = p.raw_extreme;
             point(parent, child, &segs, p.direction, x.at, x.price)
@@ -408,7 +401,7 @@ fn child_of(parent: &Level, child: &Level, name: &str) -> Child {
                 last_stroke: last.map_or_else(Vec::new, |s| {
                     forces(child, &objects, "inside_last", s.direction)
                 }),
-                unfinished: parent.reverse_seg().map_or_else(Vec::new, |u| {
+                unfinished: parent.unfinished_seg().map_or_else(Vec::new, |u| {
                     forces(child, &objects, "inside_unfinished", u.direction)
                 }),
             };
@@ -443,6 +436,7 @@ fn output(level: &Level, name: &str, child: Option<Option<Child>>) -> LevelOut {
         status: if ready { "ready" } else { "missing_material" },
         last_input_at: level.input.last().expect("a level has bars").dt,
         strokes: level.strokes.clone(),
+        last_stroke_extending: ready.then_some(level.last_stroke_extending),
         unfinished: level.unfinished.clone(),
         after_extreme: level.after_extreme.clone(),
         fractals: level.fractals.clone(),

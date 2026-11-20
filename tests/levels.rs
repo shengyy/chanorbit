@@ -63,6 +63,14 @@ fn states_agree_with_the_last_close_and_zones_partition() {
                     if let Some(d) = st["departure"].as_str() {
                         kinds.insert(format!("{role}/departure/{d}"));
                     }
+                    // A departure that is the extending last stroke.
+                    let strokes = level["strokes"].as_array().unwrap();
+                    if level["last_stroke_extending"] == true
+                        && st["departure"] == json!(strokes.len() - 1)
+                    {
+                        kinds.insert(format!("{role}/departure/extending"));
+                        assert_eq!(st["member"], level["last_stroke_member"]["member"]);
+                    }
                     kinds.insert(format!("{role}/versus_edge/{}", st["versus_edge"]));
                     if let Some(r) = st["retest_role"]["role"].as_str() {
                         kinds.insert(format!("retest_role/{r}"));
@@ -85,11 +93,7 @@ fn states_agree_with_the_last_close_and_zones_partition() {
                             let dd = z["dd"].as_f64().unwrap();
                             (dd, price < dd)
                         };
-                        if st["departure"] == "last_extended" {
-                            // Its extension reaches past the stroke's own
-                            // end, which `dd`/`gg` were taken from.
-                            assert!(!beyond || new, "{st}");
-                        } else if st["member"] == true {
+                        if st["member"] == true {
                             assert!(!new || price == outer, "{st}");
                         } else {
                             assert_eq!(new, beyond, "{st}");
@@ -165,7 +169,7 @@ fn states_agree_with_the_last_close_and_zones_partition() {
         "ended/departed",
         "ended/formed_out",
         "latest/departure/unfinished",
-        "latest/departure/last_extended",
+        "latest/departure/extending",
         "latest/departure/after_extreme",
         "latest/against_exit_side",
         "ended/against_exit_side",
@@ -382,14 +386,15 @@ fn new_extreme_is_strictly_beyond_every_other_member() {
     }
 }
 
-/// A departure whose exit lies in the extension of the last stroke is that
-/// stroke taken whole (`last_extended`), in progress; once a reverse move
-/// completes it, the stroke reads the same and so does its row.
+/// An extending last stroke is that stroke, not yet ended: it is read to its
+/// current extreme, and a departure in it is that stroke by its index, in
+/// progress. Once a reverse move ends it at the same extreme it reads the same.
 #[test]
-fn a_departure_in_an_extension_is_the_whole_last_stroke() {
+fn an_extending_last_stroke_is_read_to_its_current_extreme() {
     // A slow rise to 16 (MACD ready at the entry stroke), the centre above
     // (core [10.95, 13.55]), a member down stroke to 11.2, a two-bar rebound,
-    // then a fall to 9 that extends that stroke out of the core.
+    // then a fall to 9 that extends that stroke out of the core; the rebound
+    // to 10.5 that ends it stays below the core.
     let leg = |p: &[f64]| p.iter().map(|&x| (x, 6)).collect::<Vec<_>>();
     let centre = [16.0, 20.0, 10.0, 14.0, 11.0, 13.5];
     let extending: Vec<(f64, usize)> = [(12.0, 1), (16.0, 180)]
@@ -413,35 +418,48 @@ fn a_departure_in_an_extension_is_the_whole_last_stroke() {
         let before = answer(&zigzag(&flip(&extending)));
         let after = answer(&zigzag(&flip(&completed)));
         let level = &before["levels"][0];
-        assert_eq!(level["unfinished"]["kind"], "extension", "{mirror}");
-        let st = &level["centres"].as_array().unwrap().last().unwrap()["state"];
-        assert_eq!(st["departure"], "last_extended", "{mirror}: {st}");
-        assert_eq!(st["member"], true, "{mirror}: {st}");
+        assert_eq!(level["last_stroke_extending"], true, "{mirror}");
+        assert!(level["unfinished"].is_null(), "{mirror}");
         let strokes = level["strokes"].as_array().unwrap();
         let last = strokes.len() - 1;
-        // Guard: the extending last stroke comes after the third member.
+        let stroke = &strokes[last];
+        // Read to the current extreme: the fall's last bar.
+        let extreme = if mirror { 21.05 } else { 8.95 };
+        assert_eq!(stroke["end_price"], json!(extreme), "{mirror}");
+        assert_eq!(stroke["end_at"], level["last_input_at"], "{mirror}");
+        assert_eq!(stroke["finished"], false, "{mirror}");
+        assert_eq!(level["last_stroke_member"]["reason"], "not_finished");
         let centre = level["centres"].as_array().unwrap().last().unwrap();
+        // Guard: the extending last stroke comes after the third member.
         assert!(last as u64 > centre["first_member"].as_u64().unwrap() + 2);
+        let st = &centre["state"];
+        assert_eq!(st["departure"], json!(last), "{mirror}: {st}");
+        assert_eq!(st["member"], level["last_stroke_member"]["member"]);
         let done = &after["levels"][0];
+        assert_eq!(done["last_stroke_extending"], false, "{mirror}");
         let st_done = &done["centres"].as_array().unwrap().last().unwrap()["state"];
         assert_eq!(st_done["departure"], json!(last), "{mirror}: {st_done}");
-        let stroke = &done["strokes"][last];
-        // The completed stroke is the extended one: same start, the end at
-        // the extension's extreme.
-        assert_eq!(stroke["start_at"], strokes[last]["start_at"]);
-        assert_eq!(stroke["end_at"], level["unfinished"]["end_price_at"]);
-        assert_eq!(stroke["end_price"], level["unfinished"]["end_price"]);
         for key in [
+            "start_at",
+            "end_at",
+            "end_price",
+            "raw_extreme",
+            "dif_extreme",
+            "power",
+        ] {
+            assert_eq!(done["strokes"][last][key], stroke[key], "{mirror}: {key}");
+        }
+        for key in [
+            "kind",
             "raw_extreme",
             "edge",
-            "member",
             "new_extreme",
             "first_beyond_at",
         ] {
             assert_eq!(st[key], st_done[key], "{mirror}: {key}");
         }
         let (live, final_row) = (row(&before, "in_progress"), row(&after, "completed"));
-        assert_eq!(live["numerator"], "last_extended");
+        assert_eq!(live["numerator"], json!(last));
         assert!(live["area"].is_f64() && live["price"].is_f64(), "{live}");
         for key in [
             "denominator",
@@ -456,12 +474,11 @@ fn a_departure_in_an_extension_is_the_whole_last_stroke() {
     }
 }
 
-/// When the extending last stroke is the centre's third member, its
-/// extension is the departure (`extension`, not a member): the third stroke
-/// ending outside the core belongs to the centre's formation, so it is never
-/// taken whole. Completed by a reverse move, that centre is `formed_out`.
+/// An extending third member is not finished, so the centre it would
+/// complete is not yet listed; once a reverse move ends it outside the core,
+/// the centre is `formed_out` with that stroke as its third member.
 #[test]
-fn an_extending_third_member_is_not_the_departure() {
+fn an_extending_third_member_completes_its_centre_once_finished() {
     // Entry 10 -> 20, members 20 -> 14 -> 18 -> 13 (b3 ends below the core
     // [13.95, 18.05]) and 20 -> 14 -> 18 -> 15 (b3 ends at zd 14.95); a
     // two-bar rebound into the core, then a fall that extends b3 out of it;
@@ -499,36 +516,26 @@ fn an_extending_third_member_is_not_the_departure() {
             };
             let v = answer(&zigzag(&flip(case)));
             let level = &v["levels"][0];
-            assert_eq!(level["unfinished"]["kind"], "extension", "{i} {mirror}");
+            assert_eq!(level["last_stroke_extending"], true, "{i} {mirror}");
             let strokes = level["strokes"].as_array().unwrap();
-            let centre = level["centres"].as_array().unwrap().last().unwrap();
-            assert_eq!(centre["member_count"], 3, "{i} {mirror}");
-            assert_eq!(
-                centre["last_member"].as_u64(),
-                Some(strokes.len() as u64 - 1),
-                "{i} {mirror}"
-            );
-            let st = &centre["state"];
-            assert_eq!(st["kind"], "departed", "{i} {mirror}: {st}");
-            assert_eq!(st["departure"], "extension", "{i} {mirror}: {st}");
-            assert_eq!(st["member"], false, "{i} {mirror}: {st}");
-            assert!(st["retest"].is_null(), "{i} {mirror}: {st}");
-            let rows = level["comparisons"]["in_progress"].as_array().unwrap();
-            assert!(
-                rows.iter().all(|r| r["numerator"] != "last_extended"),
-                "{i} {mirror}: {rows:?}"
-            );
+            let last = strokes.len() - 1;
+            assert_eq!(strokes[last]["finished"], false, "{i} {mirror}");
+            assert!(level["centres"].as_array().unwrap().is_empty(), "{v}");
+            assert_eq!(level["last_stroke_member"]["reason"], "no_centre");
             let done: Vec<(f64, usize)> = case.iter().copied().chain([(13.5, 6)]).collect();
             let after = answer(&zigzag(&flip(&done)));
             let done = &after["levels"][0];
-            assert_eq!(done["unfinished"]["kind"], "reverse", "{i} {mirror}");
-            let last = &done["strokes"][strokes.len() - 1];
-            assert_eq!(last["end_price"], level["unfinished"]["end_price"]);
+            assert!(done["unfinished"].is_object(), "{i} {mirror}");
+            for key in ["start_at", "end_at", "end_price", "power"] {
+                assert_eq!(done["strokes"][last][key], strokes[last][key], "{key}");
+            }
             let centre = done["centres"].as_array().unwrap().last().unwrap().clone();
+            assert_eq!(centre["last_member"], json!(last), "{i} {mirror}");
             assert_eq!(
                 centre["state"]["kind"], "formed_out",
                 "{i} {mirror}: {centre}"
             );
+            assert_eq!(centre["state"]["third"], json!(last));
         }
     }
 }
