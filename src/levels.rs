@@ -659,10 +659,12 @@ impl Level {
         };
         let j = containing(exit.dt);
         // A departure in the extending last stroke or its extension is that
-        // stroke taken whole; it has no retest yet.
+        // stroke taken whole when the stroke comes after the third member; it
+        // has no retest yet. A third member that is still extending belongs to
+        // the centre's formation, so its extension stays the departure.
         let x = match next {
-            None => self.whole(segs[j]),
-            Some(_) => segs[j],
+            None if self.strokes.len() - 1 > third => self.whole(segs[j]),
+            _ => segs[j],
         };
         let departure_stroke = match x.pos {
             Pos::Stroke(p) => Some(p),

@@ -419,6 +419,9 @@ fn a_departure_in_an_extension_is_the_whole_last_stroke() {
         assert_eq!(st["member"], true, "{mirror}: {st}");
         let strokes = level["strokes"].as_array().unwrap();
         let last = strokes.len() - 1;
+        // Guard: the extending last stroke comes after the third member.
+        let centre = level["centres"].as_array().unwrap().last().unwrap();
+        assert!(last as u64 > centre["first_member"].as_u64().unwrap() + 2);
         let done = &after["levels"][0];
         let st_done = &done["centres"].as_array().unwrap().last().unwrap()["state"];
         assert_eq!(st_done["departure"], json!(last), "{mirror}: {st_done}");
@@ -449,6 +452,83 @@ fn a_departure_in_an_extension_is_the_whole_last_stroke() {
             "between",
         ] {
             assert_eq!(live[key], final_row[key], "{mirror}: {key}");
+        }
+    }
+}
+
+/// When the extending last stroke is the centre's third member, its
+/// extension is the departure (`extension`, not a member): the third stroke
+/// ending outside the core belongs to the centre's formation, so it is never
+/// taken whole. Completed by a reverse move, that centre is `formed_out`.
+#[test]
+fn an_extending_third_member_is_not_the_departure() {
+    // Entry 10 -> 20, members 20 -> 14 -> 18 -> 13 (b3 ends below the core
+    // [13.95, 18.05]) and 20 -> 14 -> 18 -> 15 (b3 ends at zd 14.95); a
+    // two-bar rebound into the core, then a fall that extends b3 out of it;
+    // a rebound to 13.5 (below the core) then ends b3 at the fall's low.
+    let cases: [&[(f64, usize)]; 2] = [
+        &[
+            (14.0, 1),
+            (10.0, 6),
+            (16.0, 40),
+            (20.0, 6),
+            (14.0, 6),
+            (18.0, 6),
+            (13.0, 6),
+            (14.2, 2),
+            (11.0, 6),
+        ],
+        &[
+            (14.0, 1),
+            (10.0, 6),
+            (16.0, 40),
+            (20.0, 6),
+            (14.0, 6),
+            (18.0, 6),
+            (15.0, 6),
+            (15.6, 2),
+            (12.0, 6),
+        ],
+    ];
+    for (i, case) in cases.iter().enumerate() {
+        for mirror in [false, true] {
+            let flip = |p: &[(f64, usize)]| -> Vec<(f64, usize)> {
+                p.iter()
+                    .map(|&(x, n)| (if mirror { 30.0 - x } else { x }, n))
+                    .collect()
+            };
+            let v = answer(&zigzag(&flip(case)));
+            let level = &v["levels"][0];
+            assert_eq!(level["unfinished"]["kind"], "extension", "{i} {mirror}");
+            let strokes = level["strokes"].as_array().unwrap();
+            let centre = level["centres"].as_array().unwrap().last().unwrap();
+            assert_eq!(centre["member_count"], 3, "{i} {mirror}");
+            assert_eq!(
+                centre["last_member"].as_u64(),
+                Some(strokes.len() as u64 - 1),
+                "{i} {mirror}"
+            );
+            let st = &centre["state"];
+            assert_eq!(st["kind"], "departed", "{i} {mirror}: {st}");
+            assert_eq!(st["departure"], "extension", "{i} {mirror}: {st}");
+            assert_eq!(st["member"], false, "{i} {mirror}: {st}");
+            assert!(st["retest"].is_null(), "{i} {mirror}: {st}");
+            let rows = level["comparisons"]["in_progress"].as_array().unwrap();
+            assert!(
+                rows.iter().all(|r| r["numerator"] != "last_extended"),
+                "{i} {mirror}: {rows:?}"
+            );
+            let done: Vec<(f64, usize)> = case.iter().copied().chain([(13.5, 6)]).collect();
+            let after = answer(&zigzag(&flip(&done)));
+            let done = &after["levels"][0];
+            assert_eq!(done["unfinished"]["kind"], "reverse", "{i} {mirror}");
+            let last = &done["strokes"][strokes.len() - 1];
+            assert_eq!(last["end_price"], level["unfinished"]["end_price"]);
+            let centre = done["centres"].as_array().unwrap().last().unwrap().clone();
+            assert_eq!(
+                centre["state"]["kind"], "formed_out",
+                "{i} {mirror}: {centre}"
+            );
         }
     }
 }
