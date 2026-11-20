@@ -38,11 +38,6 @@ fn ratio(a: Option<f64>, b: Option<f64>) -> Option<f64> {
     }
 }
 
-/// A numerator that is still moving: anything but a window stroke.
-fn moving(s: &Seg) -> bool {
-    !matches!(s.pos, Pos::Stroke(_))
-}
-
 impl Level {
     /// Same-direction area, price, mean volume and bar count of a segment.
     fn metrics(&self, s: &Seg) -> [Option<f64>; 4] {
@@ -122,13 +117,7 @@ impl Level {
             return None;
         };
         let sequence = self.sequence();
-        let get = |p: &Pos| {
-            sequence
-                .iter()
-                .copied()
-                .chain(self.last_extended_seg())
-                .find(|s| s.pos == *p)
-        };
+        let get = |p: &Pos| sequence.iter().copied().find(|s| s.pos == *p);
         let dep = get(departure)?;
         let exit_up = *edge == "zg";
         if (dep.direction == Direction::Up) != exit_up {
@@ -140,7 +129,7 @@ impl Level {
     pub(crate) fn comparisons_of(&self) -> Comparisons {
         let mut out = Comparisons::default();
         let mut push = |row: Comparison, num: &Seg| {
-            if moving(num) {
+            if self.moving(num) {
                 out.in_progress.push(row);
             } else {
                 out.completed.push(row);
@@ -165,8 +154,8 @@ impl Level {
             }) = retest
             {
                 let advance = (k + 1..n)
-                    .map(|p| self.whole(self.seg(p)))
-                    .chain(self.reverse_seg())
+                    .map(|p| self.seg(p))
+                    .chain(self.unfinished_seg())
                     .find(|s| s.direction == dep.direction);
                 if let Some(a) = advance {
                     push(self.compare("advance_vs_departure", &a, &dep), &a);
@@ -184,14 +173,10 @@ impl Level {
                 );
             }
         }
-        if let Some(u) = self.unfinished_seg() {
-            if u.pos == Pos::Unfinished {
-                if let Some(prev) = self.previous_same(n, u.direction) {
-                    push(self.compare("unfinished_vs_previous", &u, &prev), &u);
-                }
-            } else if u.direction == last.direction {
-                push(self.compare("extension_vs_last", &u, &last), &u);
-            }
+        if let Some(u) = self.unfinished_seg()
+            && let Some(prev) = self.previous_same(n, u.direction)
+        {
+            push(self.compare("unfinished_vs_previous", &u, &prev), &u);
         }
         if let Some(p) = self.after_seg()
             && let Some(prev) = self.previous_same(n, p.direction)

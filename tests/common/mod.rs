@@ -102,3 +102,34 @@ impl Diff {
         }
     }
 }
+
+/// A synthetic zigzag of `legs` legs of 7 bars each with pseudo-random leg
+/// sizes and a slight upward drift, so centres form and close along it.
+pub fn zigzag(legs: usize) -> Vec<RawBar> {
+    let start = chanorbit::contract::parse_dt("2026-01-05T09:35:00").unwrap();
+    let mut seed: u64 = 7;
+    let mut next = || {
+        seed = seed
+            .wrapping_mul(6364136223846793005)
+            .wrapping_add(1442695040888963407);
+        (seed >> 33) as f64 / (1u64 << 31) as f64
+    };
+    let cents = |x: f64| (x * 100.0).round() / 100.0;
+    let (mut price, mut bars) = (100.0_f64, Vec::new());
+    for leg in 0..legs {
+        let up = leg % 2 == 0;
+        let size = 2.0 + 6.0 * next() + if up { 0.3 } else { 0.0 };
+        for _ in 0..7 {
+            let from = price;
+            price += if up { size / 7.0 } else { -size / 7.0 };
+            bars.push(RawBar {
+                dt: start + chrono::Duration::minutes(5 * bars.len() as i64),
+                high: cents(from.max(price) + 0.05),
+                low: cents(from.min(price) - 0.05),
+                close: cents(price),
+                vol: 100.0,
+            });
+        }
+    }
+    bars
+}

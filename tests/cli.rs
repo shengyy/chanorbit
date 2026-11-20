@@ -222,7 +222,7 @@ fn stages_batch_matches_baselines_in_order() {
         .collect();
     assert_eq!(got.len(), cases.len() + 1);
     assert_eq!(got[1]["error"]["kind"], "invalid_request");
-    assert_eq!(got[1]["schema"], "chanorbit.stages/2");
+    assert_eq!(got[1]["schema"], "chanorbit.stages/3");
     let answered = got.iter().take(1).chain(got.iter().skip(2));
     for (g, c) in answered.zip(&cases) {
         assert_same(g, &c["response"], "stages");
@@ -249,7 +249,7 @@ fn observe_from_is_refused_by_geometry_even_as_null() {
         let out = chanorbit(&["geometry"], &request(value));
         assert_eq!(out.status.code(), Some(1), "observe_from {value}");
         let v: Value = serde_json::from_slice(&out.stdout).unwrap();
-        assert_eq!(v["schema"], "chanorbit.geometry/1");
+        assert_eq!(v["schema"], "chanorbit.geometry/2");
         assert_eq!(v["id"], "g");
         assert_eq!(
             v["error"]["kind"], "invalid_request",
@@ -333,7 +333,7 @@ fn levels_batch_matches_baselines_in_order() {
         .collect();
     assert_eq!(got.len(), cases.len() + 1);
     assert_eq!(got[1]["error"]["kind"], "invalid_request");
-    assert_eq!(got[1]["schema"], "chanorbit.levels/2");
+    assert_eq!(got[1]["schema"], "chanorbit.levels/3");
     assert_eq!(got[1]["id"], "bad");
     let answered = got.iter().take(1).chain(got.iter().skip(2));
     for (g, c) in answered.zip(&cases) {

@@ -1,6 +1,6 @@
 //! Raw-interval power over `(start_at, end_at]` and the MACD view.
 use crate::analyzer::Analyzer;
-use crate::macd::{LOOKBACK, MacdSeries};
+use crate::macd::{MacdSeries, default_ready_from};
 use crate::stroke::Stroke;
 use chrono::NaiveDateTime;
 use serde::{Deserialize, Serialize};
@@ -32,7 +32,8 @@ pub struct Power {
 
 /// Power over raw bars with `start < dt <= end`. Missing endpoints or
 /// non-increasing times mean `missing_coverage`; any non-finite close up to
-/// `end` means `non_finite`; unready rows before [`LOOKBACK`] mean `warmup`.
+/// `end` means `non_finite`; unready rows before
+/// [`default_ready_from`] mean `warmup`.
 /// Unavailable areas are `None`, never 0.
 pub fn interval_power(
     c: &Analyzer,
@@ -67,7 +68,7 @@ pub fn interval_power(
     } else if non_finite {
         Some("non_finite")
     } else if ready_count != rows.len() {
-        Some(if rows.iter().any(|&i| i < LOOKBACK) {
+        Some(if rows.iter().any(|&i| i < default_ready_from()) {
             "warmup"
         } else {
             "non_finite"

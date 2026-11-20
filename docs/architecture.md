@@ -17,7 +17,7 @@ One crate, `chanorbit`: a library (`src/lib.rs`) holding the engine and the JSON
 | `geometry` | The geometry snapshot: stroke facts, fractal window, centre sequence and indices, relation, candidate power |
 | `stage` | Confirmed buy-side stages of one analyzer state: first-point anchor, second, third, second-like, path guard |
 | `observe` | Per-input replay of the stages: stage identity, first-known time, age, after-retest state, stage facts |
-| `levels` | One level of a `levels` request: stroke window, raw and DIF extremes, unfinished segment, path after its extreme, tail, centre list, last close position, centre state from the raw path |
+| `levels` | One level of a `levels` request: stroke window (an extending last stroke read to its current extreme), raw and DIF extremes, unfinished segment, path after the extreme, centre list, last close position, centre state from the raw path |
 | `levels_compare` | Same-direction comparison rows of a level's segments |
 | `levels_child` | The `levels` output: every level built coarsest first (a child's window covers its parent's last stroke), child times, points with `passed_by`, forces and zones |
 | `contract` | Columnar request validation, the three commands' responses and error JSON |
