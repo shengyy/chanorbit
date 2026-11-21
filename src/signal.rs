@@ -512,6 +512,9 @@ pub struct Buy {
     pub pullback: Pullback,
     pub mid: Option<MoveFact>,
     pub leaf: Option<CompletionFact>,
+    /// Whether the leaf span holds a local centre (items 0–1 on the leaf);
+    /// `false` without the leaf level or before B holds.
+    pub leaf_centre: bool,
 }
 
 /// A1 on the parent level: the latest qualified centre departed upward
@@ -523,17 +526,22 @@ pub struct ParentDeparture {
     stroke: Seg,
     new_extreme: bool,
     area: Option<f64>,
+    /// `[zd, zg]` of every qualified centre before `centre`.
+    earlier: Vec<(f64, f64)>,
 }
 
 /// A1: the parent's latest qualified centre is `departed` through `zg` and
-/// its departure is a stroke running up that no longer extends.
+/// its departure is a stroke running up that no longer extends. The cores
+/// of the earlier qualified centres are kept for A5.
 pub fn parent_departure(p: &LevelRead) -> Option<ParentDeparture> {
     let s = p.c.strokes();
     let n = s.len();
-    let fs = read_strokes(s, 0, p.finished, p.extension);
-    let z = canonical_centres(&fs)
-        .into_iter()
-        .rfind(|z| z.member_count() >= 3 && z.members_touch_core(&fs))?;
+    let mut qualified = p.qualified_centres();
+    let z = qualified.pop()?;
+    let earlier = qualified
+        .iter()
+        .map(|c| (c.core_low, c.core_high))
+        .collect();
     let w0 = z.start - 1;
     let segs: Vec<Seg> = (w0..n)
         .map(|k| Seg {
@@ -564,6 +572,7 @@ pub fn parent_departure(p: &LevelRead) -> Option<ParentDeparture> {
         stroke,
         new_extreme,
         area: p.area(&stroke),
+        earlier,
     })
 }
 
@@ -597,7 +606,12 @@ pub fn buy(
     let passed = finest[finest.partition_point(|b| b.dt <= low.at)..]
         .iter()
         .any(|b| b.high >= h_dep);
-    if second || passed {
+    // A5: the low is not back inside an earlier parent centre's core.
+    let returned = dep
+        .earlier
+        .iter()
+        .any(|&(zd, zg)| zd <= low.price && low.price <= zg);
+    if second || passed || returned {
         return None;
     }
     // B: the pullback completes on the middle level at the low.
@@ -605,18 +619,25 @@ pub fn buy(
     let mid = t0
         .and_then(|t0| completion(m, t0, None, Direction::Down))
         .filter(|c| c.extreme.price == low.price);
-    // C: the middle level's last segment completes on the leaf, confirmed.
-    let leaf = match (&mid, l) {
-        (Some(mid), Some(l)) => covered_child(m.raw(), l.raw(), mid.last.start_at, true)
-            .and_then(|t0| completion(l, t0, None, Direction::Down))
-            .filter(|c| c.extreme.price == low.price),
+    // C, a veto on the leaf: the middle level's last segment completes there
+    // at the low, or holds no leaf local centre at all.
+    let leaf_span = match (&mid, l) {
+        (Some(mid), Some(l)) => {
+            covered_child(m.raw(), l.raw(), mid.last.start_at, true).map(|t0| (l, t0))
+        }
         _ => None,
     };
-    let stage = match (&mid, &leaf) {
-        (Some(_), Some(leaf)) if leaf.fact.confirmed_at.is_some() => Stage::Triggered,
-        (Some(mid), _) if mid.fact.confirmed_at.is_some() => Stage::Turned,
-        (Some(_), _) => Stage::Ripe,
-        (None, _) => Stage::Armed,
+    let leaf = leaf_span
+        .and_then(|(l, t0)| completion(l, t0, None, Direction::Down))
+        .filter(|c| c.extreme.price == low.price);
+    let leaf_centre =
+        leaf_span.is_some_and(|(l, t0)| local(l, t0, None, Direction::Down).is_some());
+    let c_holds = leaf_span.is_some() && (leaf.is_some() || !leaf_centre);
+    let stage = match &mid {
+        Some(mid) if mid.fact.confirmed_at.is_some() && c_holds => Stage::Triggered,
+        Some(mid) if mid.fact.confirmed_at.is_some() => Stage::Turned,
+        Some(_) => Stage::Ripe,
+        None => Stage::Armed,
     };
     // Without B the move in progress, primed once its latest element leaves
     // the local centre downward.
@@ -651,6 +672,7 @@ pub fn buy(
         },
         leaf: leaf.map(|c| c.fact),
         mid,
+        leaf_centre,
     })
 }
 

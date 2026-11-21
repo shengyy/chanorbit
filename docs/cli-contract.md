@@ -222,7 +222,8 @@ Every `dt` labels the **end** of its bar's period, and a bar still forming carri
       "last": {"start_at": "2026-01-06T22:16:00", "end_at": "2026-01-06T22:26:00", "extending": false, "area": 0.3123},
       "area_ratio": 0.2076,
       "confirmed_at": "2026-01-06T22:28:00"
-    }
+    },
+    "leaf_centre": true
   },
   "sell": null,
   "mid_support": {"low": 98.49, "low_at": "2026-01-06T22:30:00"},
@@ -230,7 +231,7 @@ Every `dt` labels the **end** of its bar's period, and a bar still forming carri
 }
 ```
 
-Cut at `2026-01-06T22:00:00`, before the new low, the same series answers `"stage": "primed"` with `pullback.low` 98.99 and the move in progress as `mid` (`leaf: null`):
+Cut at `2026-01-06T22:00:00`, before the new low, the same series answers `"stage": "primed"` with `pullback.low` 98.99 and the move in progress as `mid` (`leaf: null`, `leaf_centre: false`):
 
 ```json
 "mid": {

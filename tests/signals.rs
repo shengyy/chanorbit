@@ -1,141 +1,9 @@
-//! `signals` rules on synthetic multi-level series.
-use chanorbit::RawBar;
+//! `signals` buy-side rules, replay and requests on synthetic multi-level series.
+mod nest;
+
 use chanorbit::contract::{Command, handle_command};
+use nest::*;
 use serde_json::{Value, json};
-
-const T0: &str = "2026-01-05T00:00:00";
-
-/// A 1m path from `start` through `(price, bars)` legs: each bar moves a
-/// straight step, spans its two prices one tick wider each side and closes
-/// at the step's end; a flat leg is one-price bars.
-fn path(start: f64, legs: &[(f64, usize)]) -> Vec<RawBar> {
-    let t0 = chanorbit::contract::parse_dt(T0).unwrap();
-    let cents = |x: f64| (x * 100.0).round() / 100.0;
-    let (mut price, mut out) = (start, Vec::new());
-    for &(to, bars) in legs {
-        let step = (to - price) / bars as f64;
-        for i in 0..bars {
-            let from = price;
-            price = if i + 1 == bars { to } else { price + step };
-            let (high, low) = if from == price {
-                (cents(price), cents(price))
-            } else {
-                (cents(from.max(price) + 0.01), cents(from.min(price) - 0.01))
-            };
-            out.push(RawBar {
-                dt: t0 + chrono::Duration::minutes(out.len() as i64 + 1),
-                high,
-                low,
-                close: cents(price),
-                vol: 100.0,
-            });
-        }
-    }
-    out
-}
-
-/// Complete buckets of `k` bars, each labelled by its last bar.
-fn aggregate(bars: &[RawBar], k: usize) -> Vec<RawBar> {
-    bars.chunks_exact(k)
-        .map(|c| RawBar {
-            dt: c[k - 1].dt,
-            high: c.iter().map(|b| b.high).fold(f64::MIN, f64::max),
-            low: c.iter().map(|b| b.low).fold(f64::MAX, f64::min),
-            close: c[k - 1].close,
-            vol: c.iter().map(|b| b.vol).sum(),
-        })
-        .collect()
-}
-
-fn columns(name: &str, bars: &[RawBar]) -> Value {
-    let f = |g: fn(&RawBar) -> f64| bars.iter().map(g).collect::<Vec<_>>();
-    json!({
-        "name": name,
-        "dt": bars.iter().map(|b| b.dt.format("%Y-%m-%dT%H:%M:%S").to_string()).collect::<Vec<_>>(),
-        "high": f(|b| b.high), "low": f(|b| b.low), "close": f(|b| b.close), "vol": f(|b| b.vol),
-    })
-}
-
-/// A request over the 1m path: 30m and 5m, plus 1m when `leaf`.
-fn request(minutes: &[RawBar], leaf: bool) -> Value {
-    let mut levels = vec![
-        columns("30m", &aggregate(minutes, 30)),
-        columns("5m", &aggregate(minutes, 5)),
-    ];
-    if leaf {
-        levels.push(columns("1m", minutes));
-    }
-    json!({"id": "nest", "levels": levels})
-}
-
-fn run(command: Command, request: &Value) -> Value {
-    let (text, ok) = handle_command(command, &request.to_string());
-    assert!(ok, "{text}");
-    serde_json::from_str(&text).unwrap()
-}
-
-/// The first `n` 1m bars.
-fn cut(minutes: &[RawBar], n: usize) -> Vec<RawBar> {
-    minutes[..n].to_vec()
-}
-
-/// The parent structure: from a flat start, a 30m centre (members from 90
-/// to 99.6, 92, `p3` and 93, so `zg` = `p3` + 0.01) left upward by a stroke
-/// to 104 (`H_dep` = 104.01).
-fn parent(p3: f64) -> Vec<(f64, usize)> {
-    vec![
-        (100.0, 900),
-        (104.0, 240),
-        (90.0, 240),
-        (99.6, 240),
-        (92.0, 240),
-        (p3, 240),
-        (93.0, 240),
-        (104.0, 240),
-    ]
-}
-
-/// 1m bars before the pullback.
-const PULLBACK_AT: usize = 900 + 7 * 240;
-
-/// The 5m pullback: an entry to 99, a centre (102, 100, 101.5) and a last
-/// segment that holds a 1m five-stroke move whose last leg of `bars` 1m bars
-/// reaches `low`.
-fn pullback(low: f64, bars: usize) -> Vec<(f64, usize)> {
-    vec![
-        (99.0, 40),
-        (102.0, 40),
-        (100.0, 40),
-        (101.5, 40),
-        (99.2, 12),
-        (99.9, 8),
-        (99.4, 8),
-        (99.8, 8),
-        (low, bars),
-    ]
-}
-
-/// The parent, the pullback and `tail`.
-fn buy_path(p3: f64, pull: Vec<(f64, usize)>, tail: &[(f64, usize)]) -> Vec<RawBar> {
-    let mut legs = parent(p3);
-    legs.extend(pull);
-    legs.extend_from_slice(tail);
-    path(100.0, &legs)
-}
-
-/// The base buy series: pullback low 98.49 on the 1m bar ending at bar
-/// 2786 (the first of its 5m bar), then a rise.
-fn base() -> Vec<RawBar> {
-    buy_path(95.0, pullback(98.5, 10), &[(99.5, 20)])
-}
-
-fn buy(request: &Value) -> Value {
-    run(Command::Signals, request)["buy"].clone()
-}
-
-fn stage(request: &Value) -> Value {
-    buy(request)["stage"].clone()
-}
 
 #[test]
 fn every_stage_on_the_base_series() {
@@ -201,6 +69,7 @@ fn every_stage_on_the_base_series() {
     assert_eq!(b["leaf"]["last"]["start_at"], "2026-01-06T22:16:00");
     assert_eq!(b["leaf"]["confirmed_at"], "2026-01-06T22:28:00");
     assert_eq!(b["leaf"]["centre"]["start_at"], "2026-01-06T21:52:00");
+    assert_eq!(b["leaf_centre"], true);
     assert_eq!(b["mid"], full["buy"]["mid"]);
     assert_eq!(
         three["mid_support"],
@@ -214,17 +83,117 @@ fn an_unconfirmed_fractal_holds_the_stage_back() {
     let m = base();
     assert_eq!(stage(&request(&cut(&m, 2790), false)), "ripe");
     assert_eq!(stage(&request(&cut(&m, 2795), false)), "turned");
-    // The low on the last 1m bar of its 5m bar: the 1m bottom confirms two
-    // 1m bars later (the bar after the low ties it and merges).
-    let m = buy_path(95.0, pullback(98.5, 14), &[(99.5, 20)]);
-    let before = buy(&request(&cut(&m, 2790), true));
+}
+
+/// The leaf does not trigger ahead of the middle level: with the 1m move
+/// complete and confirmed (22:28) but the 5m down stroke still extending,
+/// the nest is ripe; one 5m bar later the 5m bottom confirms (22:35).
+#[test]
+fn the_leaf_waits_for_the_mid_bottom() {
+    let m = base();
+    let before = buy(&request(&cut(&m, 2794), true));
     assert_eq!(before["stage"], "ripe");
-    assert_eq!(before["leaf"]["confirmed_at"], Value::Null);
-    assert!(before["leaf"]["area_ratio"].as_f64().unwrap() < 1.0);
-    let after = buy(&request(&cut(&m, 2792), true));
+    assert_eq!(before["mid"]["last"]["extending"], true);
+    assert_eq!(before["leaf"]["confirmed_at"], "2026-01-06T22:28:00");
+    assert_eq!(before["leaf_centre"], true);
+    let after = buy(&request(&cut(&m, 2795), true));
     assert_eq!(after["stage"], "triggered");
-    assert_eq!(after["leaf"]["confirmed_at"], "2026-01-06T22:32:00");
+    assert_eq!(after["mid"]["confirmed_at"], "2026-01-06T22:35:00");
     assert_eq!(before["key"], after["key"]);
+}
+
+/// C is a veto: a last 5m segment that is one straight 1m drop holds no
+/// leaf centre and triggers; a 1m centre left without divergence (the last
+/// 1m leg over 25 instead of 28 bars) holds the nest at `turned`.
+#[test]
+fn the_leaf_vetoes_only_a_leaf_still_gaining() {
+    let sharp = vec![
+        (99.0, 40),
+        (102.0, 40),
+        (100.0, 40),
+        (101.5, 40),
+        (98.5, 40),
+    ];
+    let b = buy(&request(&buy_path(95.0, sharp, &[(99.5, 20)]), true));
+    assert_eq!(
+        (&b["stage"], &b["leaf_centre"], &b["leaf"]),
+        (&json!("triggered"), &json!(false), &Value::Null)
+    );
+    assert!(b["mid"]["area_ratio"].as_f64().unwrap() < 1.0);
+    let leaf = |bars: usize| {
+        buy(&request(
+            &buy_path(95.0, pullback(97.0, bars), &[(98.0, 20)]),
+            true,
+        ))
+    };
+    let gaining = leaf(25);
+    assert_eq!(
+        (&gaining["stage"], &gaining["leaf_centre"], &gaining["leaf"]),
+        (&json!("turned"), &json!(true), &Value::Null)
+    );
+    let diverging = leaf(28);
+    assert_eq!(diverging["stage"], "triggered");
+    assert!(diverging["leaf"]["area_ratio"].as_f64().unwrap() < 1.0);
+    // Without the leaf level there is nothing to say about a leaf centre.
+    let two = buy(&request(
+        &buy_path(95.0, pullback(97.0, 25), &[(98.0, 20)]),
+        false,
+    ));
+    assert_eq!(
+        (&two["stage"], &two["leaf_centre"]),
+        (&json!("turned"), &json!(false))
+    );
+}
+
+/// A5 over 30m legs of 240 bars from the flat start: an earlier 30m centre
+/// built from `head`, then `Z` (members from 90: 96.5, 92, 95, 93) left
+/// upward to 104, and the base pullback to 98.49.
+fn earlier_centre(head: &[f64]) -> Value {
+    let mut legs = vec![(100.0, 900)];
+    legs.extend(head.iter().map(|&p| (p, 240)));
+    legs.extend([90.0, 96.5, 92.0, 95.0, 93.0, 104.0].map(|p| (p, 240)));
+    legs.extend(pullback(98.5, 10));
+    legs.push((99.5, 20));
+    buy(&request(&path(100.0, &legs), false))
+}
+
+#[test]
+fn a_low_back_in_an_earlier_parent_core_stands_no_nest() {
+    // The previous centre's core [97.49, 99.51] holds the low.
+    assert_eq!(
+        earlier_centre(&[103.0, 97.0, 100.0, 97.5, 99.5]),
+        Value::Null
+    );
+    // Its core [98.59, 99.51] lies above the low.
+    let above = earlier_centre(&[103.0, 98.6, 100.0, 98.6, 99.5]);
+    assert_eq!(
+        (&above["stage"], &above["pullback"]["low"]),
+        (&json!("turned"), &json!(98.49))
+    );
+    // `zg` at the low (98.49) versus one tick below it (98.48).
+    assert_eq!(
+        earlier_centre(&[103.0, 97.0, 100.0, 97.5, 98.48]),
+        Value::Null
+    );
+    assert_eq!(
+        earlier_centre(&[103.0, 97.0, 100.0, 97.5, 98.47])["stage"],
+        "turned"
+    );
+    // Two centres before `Z`: [97.49, 99.51] holds the low, [99.09, 99.51]
+    // does not; the centre between them ([84.99, 88.01]) is below.
+    let two = |a: f64| {
+        let head = [103.0, a, 100.0, a + 0.5, 99.5, 84.0, 88.5, 85.0, 88.0, 86.0];
+        let mut legs = vec![(100.0, 900)];
+        legs.extend(head.iter().map(|&p| (p, 240)));
+        legs.extend([96.5, 92.0, 95.0, 93.0, 104.0].map(|p| (p, 240)));
+        legs.extend(pullback(98.5, 10));
+        legs.push((99.5, 20));
+        buy(&request(&path(100.0, &legs), false))
+    };
+    assert_eq!(two(97.0), Value::Null);
+    let below = two(98.6);
+    assert_eq!(below["stage"], "turned");
+    assert_eq!(below["centre"]["zd"], 92.99);
 }
 
 /// Retest touches `zg`: `zg` raised to the pullback low.
@@ -373,177 +342,6 @@ fn a_departure_from_the_local_centre_primes_the_nest() {
     );
 }
 
-/// The sell series: a 30m upswing from 92 whose 5m move (up to 97, 95,
-/// `m3`, 95.5 or 96) ends in a last up segment holding a 1m five-stroke
-/// move to `high`, then `tail`.
-fn sell_path(
-    m3: (f64, usize),
-    m4: f64,
-    inner: [f64; 4],
-    high: (f64, usize),
-    tail: &[(f64, usize)],
-) -> Vec<RawBar> {
-    let mut legs = vec![
-        (100.0, 900),
-        (104.0, 240),
-        (92.0, 240),
-        (97.0, 40),
-        (95.0, 40),
-        m3,
-        (m4, 40),
-        (inner[0], 12),
-        (inner[1], 8),
-        (inner[2], 8),
-        (inner[3], 8),
-        high,
-    ];
-    legs.extend_from_slice(tail);
-    path(100.0, &legs)
-}
-
-fn sell_base(high: (f64, usize), tail: &[(f64, usize)]) -> Vec<RawBar> {
-    sell_path((96.5, 40), 95.5, [97.3, 96.6, 97.1, 96.7], high, tail)
-}
-
-fn sell(request: &Value) -> Value {
-    run(Command::Signals, request)["sell"].clone()
-}
-
-#[test]
-fn the_sell_nest_mirrors_the_buy_side() {
-    let m = sell_base((98.0, 10), &[(97.3, 20)]);
-    let got = run(Command::Signals, &request(&m, true));
-    let s = &got["sell"];
-    assert_eq!(s["stage"], "triggered");
-    assert_eq!(s["key"], "2026-01-06T01:40:00|2026-01-06T02:30:00");
-    assert_eq!(s["segment"]["high"], 98.01);
-    assert_eq!(s["leaf"]["centre"]["start_at"], "2026-01-06T01:52:00");
-    assert!(s["leaf"]["area_ratio"].as_f64().unwrap() < 1.0);
-    assert!(s["leaf"]["confirmed_at"].is_string());
-    // The 30m upswing from 92 completes on 5m too; the last 5m up segment
-    // makes a higher high than the previous one without less area.
-    assert_eq!(
-        (
-            &s["parent_complete"],
-            &s["mid_divergent"],
-            &s["mid_lower_high"]
-        ),
-        (&json!(true), &json!(false), &json!(false))
-    );
-    assert_eq!(
-        got["mid_support"],
-        json!({"low": 95.49, "low_at": "2026-01-06T01:40:00"})
-    );
-    assert_eq!(got["buy"], Value::Null);
-    // No 30m centre: nothing to compare the upswing with.
-    assert_eq!(s["parent_vs_departure"], Value::Null);
-    // Without the leaf level the 5m top at the high turns it, same key.
-    let two = sell(&request(&m, false));
-    assert_eq!(
-        (&two["stage"], &two["key"], &two["leaf"]),
-        (&json!("turned"), &s["key"], &Value::Null)
-    );
-    assert_eq!(two["segment"], s["segment"]);
-}
-
-/// Turned: the 5m top at the high confirms on the 5m bar after the one
-/// holding it (bar 1600, not 1595); with the leaf's completion the same key
-/// is triggered.
-#[test]
-fn a_confirmed_mid_top_turns_the_sell_nest() {
-    let m = sell_base((98.0, 14), &[(97.3, 20)]);
-    assert_eq!(sell(&request(&cut(&m, 1595), false)), Value::Null);
-    let turned = sell(&request(&cut(&m, 1600), false));
-    assert_eq!(turned["stage"], "turned");
-    assert_eq!(turned["key"], "2026-01-06T01:40:00|2026-01-06T02:30:00");
-    let triggered = sell(&request(&cut(&m, 1600), true));
-    assert_eq!(triggered["stage"], "triggered");
-    assert_eq!(triggered["key"], turned["key"]);
-    assert!(triggered["leaf"]["confirmed_at"].is_string());
-}
-
-/// The 30m upswing after the retest against the departure that left the
-/// 30m centre (to 104.01): a new high or not. A long flat start readies
-/// the 30m MACD.
-#[test]
-fn the_parent_upswing_against_its_departure() {
-    let versus = |high: f64| {
-        let mut legs = vec![(100.0, 3000)];
-        legs.extend(parent(95.0).into_iter().skip(1));
-        legs.extend(pullback(98.5, 10));
-        legs.extend([(high, 240), (high - 1.0, 60)]);
-        let s = sell(&request(&path(100.0, &legs), false));
-        assert_eq!(s["stage"], "turned");
-        s["parent_vs_departure"].clone()
-    };
-    let over = versus(106.0);
-    assert_eq!(over["new_high"], true);
-    assert!(over["area_ratio"].as_f64().unwrap() > 0.0);
-    let under = versus(103.0);
-    assert_eq!(under["new_high"], false);
-    assert!(under["area_ratio"].as_f64().unwrap() > 0.0);
-}
-
-#[test]
-fn the_sell_nest_attributes() {
-    let inner = [97.5, 97.0, 97.4, 97.1];
-    // A steep previous up stroke: the last one is higher on less area.
-    let m = sell_path((97.8, 25), 96.0, inner, (98.0, 10), &[(97.3, 24)]);
-    let s = sell(&request(&m, true));
-    assert_eq!(
-        (
-            &s["mid_divergent"],
-            &s["mid_lower_high"],
-            &s["parent_complete"]
-        ),
-        (&json!(true), &json!(false), &json!(true))
-    );
-    // A previous up stroke to 98.5: a lower high, and the 30m upswing's
-    // extreme is that stroke, so it has not completed on 5m.
-    let m = sell_path((98.5, 25), 96.0, inner, (98.0, 10), &[(97.3, 24)]);
-    let s = sell(&request(&m, true));
-    assert_eq!(
-        (
-            &s["mid_divergent"],
-            &s["mid_lower_high"],
-            &s["parent_complete"]
-        ),
-        (&json!(false), &json!(true), &json!(false))
-    );
-}
-
-/// Mirrored negatives: no centre, no new high, area not smaller, top not
-/// confirmed.
-#[test]
-fn sell_side_conditions_each_matter() {
-    let tail = [(97.3, 20)];
-    let straight = sell_path(
-        (96.5, 40),
-        95.5,
-        [96.0, 96.0, 96.0, 96.0],
-        (98.0, 10),
-        &tail,
-    );
-    // Without the leaf's completion the 5m top still turns the nest.
-    let leafless = |s: Value| {
-        assert_eq!((&s["stage"], &s["leaf"]), (&json!("turned"), &Value::Null));
-    };
-    leafless(sell(&request(&straight, true)));
-    assert_eq!(
-        sell(&request(&sell_base((97.31, 10), &[(96.9, 20)]), true))["stage"],
-        "triggered"
-    );
-    leafless(sell(&request(&sell_base((97.3, 10), &[(96.9, 20)]), true)));
-    let smaller = sell(&request(&sell_base((98.8, 30), &[(98.1, 20)]), true));
-    assert!(smaller["leaf"]["area_ratio"].as_f64().unwrap() > 0.9);
-    leafless(sell(&request(&sell_base((98.9, 30), &[(98.2, 20)]), true)));
-    // The high on the last 1m bar of its 5m bar (bar 1590).
-    let m = sell_base((98.0, 14), &tail);
-    assert_eq!(sell(&request(&cut(&m, 1590), true)), Value::Null);
-    let s = sell(&request(&cut(&m, 1592), true));
-    assert_eq!(s["stage"], "triggered");
-}
-
 /// Each level truncated to the bars labelled no later than `t`.
 fn truncated(request: &Value, t: &str) -> Value {
     let mut out = request.clone();
@@ -632,7 +430,8 @@ fn observation_lists_each_stage_once_in_time_order() {
     // The last 5m segment is primed once it leaves the local centre, ripe
     // at its first new low; each lower 1m low inside the next 5m bar is a
     // new key that is only primed until that 5m bar closes at it (ripe),
-    // then triggered once the 1m bottom there confirms.
+    // then triggered once the 5m bottom there confirms (the 1m one already
+    // has, at 22:32).
     assert_eq!(
         rows,
         [
@@ -643,7 +442,7 @@ fn observation_lists_each_stage_once_in_time_order() {
             r#""2026-01-06T22:28:00" "primed" "2026-01-06T22:28:00""#,
             r#""2026-01-06T22:29:00" "primed" "2026-01-06T22:29:00""#,
             r#""2026-01-06T22:30:00" "ripe" "2026-01-06T22:30:00""#,
-            r#""2026-01-06T22:32:00" "triggered" "2026-01-06T22:30:00""#,
+            r#""2026-01-06T22:40:00" "triggered" "2026-01-06T22:30:00""#,
         ]
     );
     // The sell side records its turned rows alongside.
