@@ -1,10 +1,12 @@
-//! JSON request/response contract of `chanorbit geometry`, `stages` and
-//! `levels`. Pure functions: text in, text out; the binary owns stdin/stdout.
+//! JSON request/response contract of `chanorbit geometry`, `stages`,
+//! `levels` and `signals`. Pure functions: text in, text out; the binary owns stdin/stdout.
 use crate::analyzer::{Analyzer, Config};
 use crate::bar::RawBar;
 use crate::geometry::{Geometry, geometry};
 use crate::levels_child::{LevelOut, levels};
 use crate::observe::{StageFact, observed_stages};
+use crate::signal::{Buy, Sell, Support};
+use crate::signal_observe::{Observed, signals};
 use chrono::NaiveDateTime;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
@@ -16,12 +18,15 @@ pub const SCHEMA: &str = "chanorbit.geometry/2";
 pub const STAGES_SCHEMA: &str = "chanorbit.stages/3";
 /// Output contract version of `levels`.
 pub const LEVELS_SCHEMA: &str = "chanorbit.levels/3";
+/// Output contract version of `signals`.
+pub const SIGNALS_SCHEMA: &str = "chanorbit.signals/1";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Command {
     Geometry,
     Stages,
     Levels,
+    Signals,
 }
 
 impl Command {
@@ -30,6 +35,7 @@ impl Command {
             Command::Geometry => SCHEMA,
             Command::Stages => STAGES_SCHEMA,
             Command::Levels => LEVELS_SCHEMA,
+            Command::Signals => SIGNALS_SCHEMA,
         }
     }
 }
@@ -58,6 +64,18 @@ pub struct LevelsRequest {
     #[serde(default)]
     pub id: Value,
     pub levels: Vec<LevelInput>,
+}
+
+/// One instrument, 2 or 3 period series coarsest first, and optionally the
+/// first finest-level time to observe.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SignalsRequest {
+    #[serde(default)]
+    pub id: Value,
+    pub levels: Vec<LevelInput>,
+    #[serde(default, deserialize_with = "present_string")]
+    pub observe_from: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -95,6 +113,17 @@ pub struct LevelsResponse {
     pub schema: String,
     pub id: Value,
     pub levels: Vec<LevelOut>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct SignalsResponse {
+    pub schema: String,
+    pub id: Value,
+    pub buy: Option<Buy>,
+    pub sell: Option<Sell>,
+    pub mid_support: Option<Support>,
+    /// With `observe_from` only; `null` without it.
+    pub observed: Option<Vec<Observed>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -281,14 +310,14 @@ pub fn run_stages(req: Request) -> Result<StagesResponse, ErrorResponse> {
     })
 }
 
-/// Run one parsed `levels` request with the default stroke parameters.
-pub fn run_levels(req: LevelsRequest) -> Result<LevelsResponse, ErrorResponse> {
-    let fail = |kind, message| error(Command::Levels, req.id.clone(), kind, message);
-    if req.levels.is_empty() {
-        return Err(fail("invalid_request", "levels is empty".into()));
-    }
-    let mut inputs: Vec<(String, Vec<RawBar>)> = Vec::with_capacity(req.levels.len());
-    for (i, level) in req.levels.into_iter().enumerate() {
+/// Validated level series in request order: non-empty, unique names, bars
+/// checked as a `geometry` request; errors name the level.
+fn level_inputs(
+    levels: Vec<LevelInput>,
+    fail: impl Fn(&'static str, String) -> ErrorResponse,
+) -> Result<Vec<(String, Vec<RawBar>)>, ErrorResponse> {
+    let mut inputs: Vec<(String, Vec<RawBar>)> = Vec::with_capacity(levels.len());
+    for (i, level) in levels.into_iter().enumerate() {
         if level.name.is_empty() {
             return Err(fail(
                 "invalid_request",
@@ -315,10 +344,52 @@ pub fn run_levels(req: LevelsRequest) -> Result<LevelsResponse, ErrorResponse> {
             .map_err(|(kind, message)| fail(kind, format!("levels[{i}].{message}")))?;
         inputs.push((level.name, bars));
     }
+    Ok(inputs)
+}
+
+/// Run one parsed `levels` request with the default stroke parameters.
+pub fn run_levels(req: LevelsRequest) -> Result<LevelsResponse, ErrorResponse> {
+    let fail = |kind, message| error(Command::Levels, req.id.clone(), kind, message);
+    if req.levels.is_empty() {
+        return Err(fail("invalid_request", "levels is empty".into()));
+    }
+    let inputs = level_inputs(req.levels, fail)?;
     Ok(LevelsResponse {
         schema: LEVELS_SCHEMA.into(),
         id: req.id,
         levels: levels(&inputs),
+    })
+}
+
+/// Run one parsed `signals` request with the default stroke parameters.
+pub fn run_signals(req: SignalsRequest) -> Result<SignalsResponse, ErrorResponse> {
+    let id = req.id.clone();
+    let fail = |kind, message| error(Command::Signals, id.clone(), kind, message);
+    if !(2..=3).contains(&req.levels.len()) {
+        return Err(fail(
+            "invalid_request",
+            format!("signals takes 2 or 3 levels, got {}", req.levels.len()),
+        ));
+    }
+    let observe_from = match &req.observe_from {
+        None => None,
+        Some(text) => Some(parse_dt(text).ok_or_else(|| {
+            fail(
+                "invalid_request",
+                format!("observe_from: not YYYY-MM-DDTHH:MM:SS: {text}"),
+            )
+        })?),
+    };
+    let inputs = level_inputs(req.levels, fail)?;
+    let bars: Vec<Vec<RawBar>> = inputs.into_iter().map(|(_, b)| b).collect();
+    let (now, observed) = signals(&bars, observe_from);
+    Ok(SignalsResponse {
+        schema: SIGNALS_SCHEMA.into(),
+        id: req.id,
+        buy: now.buy,
+        sell: now.sell,
+        mid_support: now.mid_support,
+        observed,
     })
 }
 
@@ -398,6 +469,14 @@ pub fn handle_command(command: Command, text: &str) -> (String, bool) {
                 #[cfg(test)]
                 tests::panic_on_probe(&req.id);
                 run_levels(req)
+            }),
+        },
+        Command::Signals => match parse::<SignalsRequest>(command, text) {
+            Err(e) => encode::<Response>(Err(e)),
+            Ok(req) => contained(command, req.id.clone(), || {
+                #[cfg(test)]
+                tests::panic_on_probe(&req.id);
+                run_signals(req)
             }),
         },
     }
@@ -513,7 +592,7 @@ mod tests {
     }
 
     #[test]
-    fn a_panic_in_a_levels_request_is_its_internal_error() {
+    fn a_panic_in_a_levels_or_signals_request_is_its_internal_error() {
         let level = r#"{"name":"d","dt":["2020-01-02T15:00:00"],"high":[2.0],"low":[1.0],"close":[1.5],"vol":[1.0]}"#;
         let ok = format!(r#"{{"id":"a","levels":[{level}]}}"#);
         let probe = format!(r#"{{"id":"{PROBE}","levels":[{level}]}}"#);
@@ -522,6 +601,16 @@ mod tests {
         assert!(!ok);
         let e: Value = serde_json::from_str(&text).unwrap();
         assert_eq!(e["schema"], LEVELS_SCHEMA);
+        assert_eq!(e["id"], PROBE);
+        assert_eq!(e["error"]["kind"], "internal_error");
+        let two = format!(r#"[{level},{}]"#, level.replace(r#""d""#, r#""e""#));
+        let ok = format!(r#"{{"id":"a","levels":{two}}}"#);
+        let probe = format!(r#"{{"id":"{PROBE}","levels":{two}}}"#);
+        assert!(handle_bytes(Command::Signals, ok.as_bytes()).1);
+        let (text, ok) = handle_bytes(Command::Signals, probe.as_bytes());
+        assert!(!ok);
+        let e: Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(e["schema"], SIGNALS_SCHEMA);
         assert_eq!(e["id"], PROBE);
         assert_eq!(e["error"]["kind"], "internal_error");
     }

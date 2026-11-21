@@ -1,6 +1,6 @@
 # chanOrbit
 
-轻量纯 Rust 缠论结构引擎：包含处理、分型、笔、笔中枢、MACD 区间力度、结构几何快照与已确认买侧阶段的逐 K 观察，以单一可执行文件提供，经 stdin/stdout 交换 JSON。
+轻量纯 Rust 缠论结构引擎：包含处理、分型、笔、笔中枢、MACD 区间力度、结构几何快照、已确认买侧阶段的逐 K 观察、多级别结构事实与买卖两侧区间套信号，以单一可执行文件提供，经 stdin/stdout 交换 JSON。
 
 [English](README.md) · [产品范围](PRODUCT.md) · [文档](docs/README.md) · [测试状态](docs/status.md)
 
@@ -28,6 +28,10 @@ target/release/chanorbit geometry --batch < requests.jsonl > responses.jsonl
 ```
 
 `chanorbit stages` 接受同样的请求字段，外加可选的 `observe_from`，返回最后一根 K 线时已确认的二买、三买与类二买，各带中枢、角色笔、首知时刻、阶段年龄与回试之后的状态。
+
+`chanorbit levels` 接受同一标的由粗到细的多个周期序列，返回各级别的笔窗口、近端中枢及其相对最新价的状态、同向比较，以及次级在本级中的位置。
+
+`chanorbit signals` 接受 2 或 3 个这样的序列，返回三买区间套（上级三买回试在次级走势完成，带阶段）、上涨结束区间套与本级支撑；带 `observe_from` 时逐 K 重放，列出每个区间套阶段首次成立的时刻。
 
 请求、响应、错误与退出码见 [docs/cli-contract.md](docs/cli-contract.md)；各对象定义见 [docs/structure-contract.md](docs/structure-contract.md)。
 

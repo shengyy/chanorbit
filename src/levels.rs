@@ -1,18 +1,20 @@
 //! Per-level structure facts of the `levels` command: stroke window, raw and
 //! DIF extremes, unfinished segment and the path after its extreme, centres
 //! with their state, and same-direction comparisons. Definitions are owned by
-//! `docs/structure-contract.md#levels`.
+//! `docs/structure-contract.md#levels`; the centre state is in `levels_state`.
 use crate::analyzer::{Analyzer, Config};
 use crate::bar::{NewBar, RawBar};
 use crate::candidate::candidate_stroke;
 use crate::centre::{Centre, canonical_centres};
 use crate::geometry::{FractalFact, relation};
 use crate::levels_compare::Comparisons;
+use crate::levels_state::centre_state;
 use crate::macd::{MacdSeries, raw_macd};
 use crate::power::{Power, interval_power};
-use crate::stroke::{Direction, Stroke, extreme};
+use crate::stroke::{Direction, Endpoint, Stroke, extreme};
 use chrono::NaiveDateTime;
 use serde::{Serialize, Serializer};
+use std::borrow::Cow;
 use std::sync::Arc;
 
 /// Centres listed per level: the latest qualified one and up to four before it.
@@ -201,7 +203,11 @@ fn dedup_last(bars: &[RawBar]) -> Vec<RawBar> {
 }
 
 /// Index range of raw bars with `start < dt <= end`.
-fn rows(raw: &[RawBar], start: NaiveDateTime, end: NaiveDateTime) -> std::ops::Range<usize> {
+pub(crate) fn rows(
+    raw: &[RawBar],
+    start: NaiveDateTime,
+    end: NaiveDateTime,
+) -> std::ops::Range<usize> {
     let a = raw.partition_point(|b| b.dt <= start);
     let b = raw.partition_point(|b| b.dt <= end);
     a..b.max(a)
@@ -222,7 +228,7 @@ pub fn raw_extreme(
 }
 
 /// Raw extreme over `[from, end]`, the same rule.
-fn raw_extreme_from(
+pub(crate) fn raw_extreme_from(
     raw: &[RawBar],
     d: Direction,
     from: NaiveDateTime,
@@ -280,6 +286,90 @@ fn newbars_from_end(pending: &[Arc<NewBar>], at: NaiveDateTime) -> usize {
     pending.len() - holding(pending, at).saturating_sub(1)
 }
 
+/// The level's extension and how many strokes count for centres: an
+/// extending last stroke is that stroke, not yet ended, read to its current
+/// extreme and finished as a stroke ending there is.
+pub(crate) fn counted(c: &Analyzer) -> (Option<Endpoint>, usize) {
+    let n = c.strokes().len();
+    let extension = c.extension();
+    let finished = match extension {
+        Some(x) => n - 1 + usize::from(newbars_from_end(c.pending_bars(), x.at) >= 5),
+        None => c.finished_count(),
+    };
+    (extension, finished)
+}
+
+/// `all[from..to]` with the last stroke read to `extension` when the slice
+/// holds it.
+pub(crate) fn read_strokes(
+    all: &[Stroke],
+    from: usize,
+    to: usize,
+    extension: Option<Endpoint>,
+) -> Cow<'_, [Stroke]> {
+    match extension {
+        Some(x) if to == all.len() && from < to => {
+            let mut read = all[from..to].to_vec();
+            read.last_mut().expect("non-empty").end = x;
+            Cow::Owned(read)
+        }
+        _ => Cow::Borrowed(&all[from..to.max(from)]),
+    }
+}
+
+/// The elements after the last stroke, whose read end is `last_at` at
+/// `last_price` in direction `last_direction`: the unfinished reverse segment
+/// (the available reverse candidate), and the path after the extreme of the
+/// last element with that path's raw extreme.
+pub(crate) fn tail(
+    c: &Analyzer,
+    last_direction: Direction,
+    last_at: NaiveDateTime,
+    last_price: f64,
+) -> (Option<Seg>, Option<(Seg, Extreme)>) {
+    let raw = c.raw_bars();
+    let candidate = candidate_stroke(c);
+    let mut unfinished = None;
+    // The path after the extreme follows the last element: the unfinished
+    // reverse segment, otherwise the last stroke as read.
+    let mut path_from = (last_direction.opposite(), last_at, last_price);
+    if candidate.state == "available"
+        && candidate.kind.as_deref() == Some("reverse")
+        && let (Some(d), Some(a), Some(ap), Some(e), Some(et), Some(_)) = (
+            candidate.direction,
+            candidate.anchor_at,
+            candidate.anchor_price,
+            candidate.end_price,
+            candidate.end_price_at,
+            raw.last(),
+        )
+    {
+        unfinished = Some(Seg {
+            pos: Pos::Unfinished,
+            direction: d,
+            start_at: a,
+            end_at: et,
+            start_price: ap,
+            end_price: e,
+        });
+        path_from = (d.opposite(), et, e);
+    }
+    let (pd, et, e) = path_from;
+    let after = raw.last().and_then(|last| {
+        let x = raw_extreme(raw, pd, et, last.dt)?;
+        let seg = Seg {
+            pos: Pos::AfterExtreme,
+            direction: pd,
+            start_at: et,
+            end_at: last.dt,
+            start_price: e,
+            end_price: x.price,
+        };
+        Some((seg, x))
+    });
+    (unfinished, after)
+}
+
 /// NewBars of the extending last stroke ending at `at`: from its first
 /// NewBar to the one after the NewBar holding `at`, those that exist.
 fn extended_newbars(last: &Stroke, pending: &[Arc<NewBar>], at: NaiveDateTime) -> usize {
@@ -295,22 +385,10 @@ fn versus(a: &Centre, b: &Centre) -> Versus {
     }
 }
 
-fn position(price: f64, low: f64, high: f64) -> &'static str {
+pub(crate) fn position(price: f64, low: f64, high: f64) -> &'static str {
     if price > high {
         "above"
     } else if price < low {
-        "below"
-    } else {
-        "inside"
-    }
-}
-
-/// Side of a raw bar against the core: `above` (low over `zg`), `below`
-/// (high under `zd`), otherwise `inside`.
-fn side(b: &RawBar, zd: f64, zg: f64) -> &'static str {
-    if b.low > zg {
-        "above"
-    } else if b.high < zd {
         "below"
     } else {
         "inside"
@@ -355,27 +433,12 @@ impl Level {
             return;
         }
         let n = all.len();
-        // An extending last stroke is that stroke, not yet ended: it is read
-        // to its current extreme, and is finished as a stroke ending there is.
-        let extension = c.extension();
-        let finished = match extension {
-            Some(x) => n - 1 + usize::from(newbars_from_end(c.pending_bars(), x.at) >= 5),
-            None => c.finished_count(),
-        };
-        let extended: Vec<Stroke>;
-        let fs: &[Stroke] = match extension {
-            Some(x) if finished == n => {
-                let mut read = all.to_vec();
-                read[n - 1].end = x;
-                extended = read;
-                &extended
-            }
-            _ => &all[..finished],
-        };
-        let sequence = canonical_centres(fs);
+        let (extension, finished) = counted(c);
+        let fs = read_strokes(all, 0, finished, extension);
+        let sequence = canonical_centres(&fs);
         let qualified: Vec<Centre> = sequence
             .iter()
-            .filter(|z| z.member_count() >= 3 && z.members_touch_core(fs))
+            .filter(|z| z.member_count() >= 3 && z.members_touch_core(&fs))
             .copied()
             .collect();
         let listed = &qualified[qualified.len().saturating_sub(LISTED_CENTRES)..];
@@ -421,51 +484,36 @@ impl Level {
             .filter(|f| f.dt >= since)
             .map(FractalFact::from)
             .collect();
-        let candidate = candidate_stroke(c);
         let last = self
             .strokes
             .last()
             .expect("the window holds the last stroke");
-        // The path after the extreme follows the last element: the unfinished
-        // reverse segment, otherwise the last stroke as read.
-        let mut path_from = (last.direction.opposite(), last.end_at, last.end_price);
-        if candidate.state == "available"
-            && candidate.kind.as_deref() == Some("reverse")
-            && let (Some(d), Some(a), Some(ap), Some(e), Some(et), Some(last)) = (
-                candidate.direction,
-                candidate.anchor_at,
-                candidate.anchor_price,
-                candidate.end_price,
-                candidate.end_price_at,
-                raw.last(),
-            )
-        {
+        let (unfinished, after) = tail(c, last.direction, last.end_at, last.end_price);
+        if let (Some(u), Some(last)) = (unfinished, raw.last()) {
+            let (d, a, et) = (u.direction, u.start_at, u.end_at);
             self.unfinished = Some(Unfinished {
                 direction: d,
                 anchor_at: a,
-                anchor_price: ap,
-                end_price: e,
+                anchor_price: u.start_price,
+                end_price: u.end_price,
                 end_price_at: et,
                 bars_after_extreme: rows(raw, et, last.dt).len(),
                 raw_extreme: raw_extreme(raw, d, a, et),
                 dif_extreme: dif_extreme(raw, macd, d, a, et),
                 power: interval_power(c, macd, a, et),
             });
-            path_from = (d.opposite(), et, e);
         }
-        let (pd, et, e) = path_from;
-        if let Some(last) = raw.last()
-            && let Some(x) = raw_extreme(raw, pd, et, last.dt)
-        {
+        if let Some((p, x)) = after {
+            let (pd, et, end) = (p.direction, p.start_at, p.end_at);
             self.after_extreme = Some(AfterExtreme {
                 direction: pd,
                 start_at: et,
-                start_price: e,
-                end_at: last.dt,
+                start_price: p.start_price,
+                end_at: end,
                 raw_extreme: x,
-                bar_count: rows(raw, et, last.dt).len(),
-                dif_extreme: dif_extreme(raw, macd, pd, et, last.dt),
-                power: interval_power(c, macd, et, last.dt),
+                bar_count: rows(raw, et, end).len(),
+                dif_extreme: dif_extreme(raw, macd, pd, et, end),
+                power: interval_power(c, macd, et, end),
             });
         }
         let last_index = n - 1;
@@ -584,173 +632,6 @@ impl Level {
     /// The centre's state from its raw path after the third member
     /// (`docs/structure-contract.md#centre-state`).
     fn state_of(&self, z: &Centre, next: Option<&Centre>, k: usize) -> State {
-        let raw = self.raw();
-        let w0 = self.window_start;
-        let (zd, zg) = (z.core_low, z.core_high);
-        let members = z.member_count();
-        let third = z.start + 2 - w0;
-        let segs = self.sequence();
-        let last = raw.last().expect("a level with strokes has bars");
-        let (until, end_side) = match next {
-            Some(_) => {
-                let closing = &self.strokes[z.end - w0];
-                (closing.end_at, position(closing.end_price, zd, zg))
-            }
-            None => (last.dt, position(last.close, zd, zg)),
-        };
-        let containing = |t: NaiveDateTime| {
-            segs.iter()
-                .position(|s| s.start_at < t && t <= s.end_at)
-                .unwrap_or_else(|| panic!("no segment holds {t} (centre {k})"))
-        };
-        if end_side == "inside" {
-            assert!(
-                next.is_none(),
-                "centre {k}: the stroke that closed it ends inside its core [{zd}, {zg}]"
-            );
-            let at = if last.dt > self.strokes[third].end_at {
-                containing(last.dt)
-            } else {
-                third
-            };
-            return State::Inside {
-                segment: segs[at].pos,
-            };
-        }
-        let path = &raw[rows(raw, self.strokes[third].end_at, until)];
-        let after_third = |to: usize| segs[third + 1..to].iter().map(|s| s.pos).collect();
-        // The path starts at the third member's end price, then its raw bars.
-        let start_met = position(self.strokes[third].end_price, zd, zg) != end_side;
-        let above = end_side == "above";
-        let exit_direction = if above {
-            Direction::Up
-        } else {
-            Direction::Down
-        };
-        // The exit is the last bar touching the core when it closes beyond
-        // the edge and the element holding it runs in the exit direction;
-        // otherwise the bar after it (that bar itself when it is the last).
-        let star = match path.iter().rposition(|b| side(b, zd, zg) != end_side) {
-            Some(i) => {
-                let b = &path[i];
-                let closed_out = if above { b.close > zg } else { b.close < zd };
-                let runs_out = segs
-                    .iter()
-                    .find(|s| s.start_at < b.dt && b.dt <= s.end_at)
-                    .is_some_and(|s| s.direction == exit_direction);
-                if closed_out && runs_out {
-                    Some(b)
-                } else {
-                    path.get(i + 1).or(Some(b))
-                }
-            }
-            None if start_met => path.first(),
-            None => None,
-        };
-        let Some(exit) = star else {
-            assert!(
-                members == 3,
-                "centre {k}: {members} members but the path never meets the core [{zd}, {zg}] (ended {}, path {} bars after {}, until {until}, side {end_side})",
-                next.is_some(),
-                path.len(),
-                self.strokes[third].end_at
-            );
-            let to = match next {
-                Some(_) => z.end - w0 + 1,
-                None => segs.len(),
-            };
-            return State::FormedOut {
-                third: Pos::Stroke(2 + z.start - w0),
-                after: after_third(to),
-            };
-        };
-        let j = containing(exit.dt);
-        let x = segs[j];
-        let departure_stroke = match x.pos {
-            Pos::Stroke(p) => Some(p),
-            _ => None,
-        };
-        let retest = match x.pos {
-            Pos::Stroke(_) => segs
-                .get(j + 1)
-                .filter(|r| matches!(r.pos, Pos::Stroke(_) | Pos::Unfinished))
-                .copied(),
-            _ => None,
-        };
-        // Toward the core: the retest's lowest low after an upward exit,
-        // its highest high after a downward one.
-        let toward = if above {
-            Direction::Down
-        } else {
-            Direction::Up
-        };
-        let retest_extreme = retest.and_then(|r| raw_extreme(raw, toward, r.start_at, r.end_at));
-        let versus_edge = retest_extreme.map(|e| {
-            let (edge, beyond) = if above {
-                (zg, e.price > zg)
-            } else {
-                (zd, e.price < zd)
-            };
-            if e.price == edge {
-                "at"
-            } else if beyond {
-                "beyond"
-            } else {
-                "inside"
-            }
-        });
-        let retest_role = match (next, retest.map(|r| r.pos)) {
-            (Some(n), Some(Pos::Stroke(p))) => {
-                let p = p + w0;
-                let role = if p + 1 == n.start {
-                    Some("entry")
-                } else if (n.start..n.end).contains(&p) {
-                    Some("member")
-                } else {
-                    None
-                };
-                role.map(|role| RetestRole {
-                    centre: k + 1,
-                    role,
-                })
-            }
-            _ => None,
-        };
-        let toward_exit = x.direction == exit_direction;
-        // Against the exit side: the extreme on the exit side from the exit bar on.
-        let extreme = if toward_exit {
-            raw_extreme(raw, x.direction, x.start_at, x.end_at)
-        } else {
-            raw_extreme_from(raw, exit_direction, exit.dt, x.end_at)
-        };
-        // Beyond every member but the departure itself, at the endpoints the
-        // centre's `dd`/`gg` are taken from; an equal price is not new.
-        let others = (z.start - w0..z.end - w0)
-            .filter(|&i| Some(i) != departure_stroke)
-            .map(|i| &self.strokes[i]);
-        let new_extreme = extreme.filter(|_| toward_exit).map(|e| {
-            if above {
-                e.price > others.map(|s| s.high).fold(f64::NEG_INFINITY, f64::max)
-            } else {
-                e.price < others.map(|s| s.low).fold(f64::INFINITY, f64::min)
-            }
-        });
-        State::Departed {
-            departure: x.pos,
-            direction: x.direction,
-            edge: if above { "zg" } else { "zd" },
-            raw_extreme: extreme,
-            new_extreme,
-            member: departure_stroke.is_some_and(|p| p + w0 < z.end),
-            first_beyond_at: exit.dt,
-            retest: retest.map(|r| r.pos),
-            retest_extreme,
-            versus_edge,
-            after_retest: next.is_none().then(|| match retest {
-                Some(_) => segs[j + 2..].iter().map(|s| s.pos).collect(),
-                None => Vec::new(),
-            }),
-            retest_role,
-        }
+        centre_state(self.raw(), &self.sequence(), self.window_start, z, next, k)
     }
 }

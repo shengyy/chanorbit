@@ -12,11 +12,12 @@ chanorbit geometry --batch           # stdin: JSON Lines, one request per line; 
 chanorbit geometry --batch --jobs N  # N ≥ 1 worker threads (default: available CPUs)
 chanorbit stages [--batch [--jobs N]]  # the same, answering with the buy-side stages
 chanorbit levels [--batch [--jobs N]]  # one instrument, several period series: multi-level structure facts
-chanorbit --version | -V             # "chanorbit <version> schemas <geometry schema> <stages schema> <levels schema>"
+chanorbit signals [--batch [--jobs N]] # one instrument, 2 or 3 period series: buy- and sell-side nests
+chanorbit --version | -V             # "chanorbit <version> schemas <geometry> <stages> <levels> <signals schema>"
 chanorbit --help | -h
 ```
 
-`geometry` answers with the structure snapshot of the last input; `stages` replays the inputs and answers with the confirmed buy-side stages and their observation. Both take the same request fields and input checks, except `observe_from`, which only `stages` accepts. `levels` takes a list of such series ([levels request](#levels-request)). All three follow the same batch, error and exit-code rules.
+`geometry` answers with the structure snapshot of the last input; `stages` replays the inputs and answers with the confirmed buy-side stages and their observation. Both take the same request fields and input checks, except `observe_from`, which only `stages` accepts. `levels` takes a list of such series ([levels request](#levels-request)), `signals` 2 or 3 of them ([signals request](#signals-request)). All four follow the same batch, error and exit-code rules.
 
 `--jobs` is accepted only together with `--batch`; alone, or with a value that is not a positive integer, it is a command-line error (exit 2).
 
@@ -58,6 +59,17 @@ One instrument at one moment: `id` (any JSON, echoed) and `levels`, a non-empty 
 ```
 
 Every `dt` labels the **end** of its bar's period, and a bar still forming carries the end of its period: the daily bar forming during the 16 November session above is `2026-11-16T15:00:00`, and the 30-minute bar covering 10:30–11:00 is `11:00:00`. How a finer time maps into a coarser bar is defined in the [structure contract](structure-contract.md#bar-time). `observe_from` is not accepted. Errors in one level fail the request and name it: `levels[1].low[3]: …`.
+
+## Signals request
+
+`id`, `levels` and an optional `observe_from`. `levels` holds exactly 2 or 3 series, coarsest first, each accepted exactly as a `levels` element (`name`, the five columns, the same checks and error naming); by position they are the parent, the middle and the optional leaf level ([structure contract](structure-contract.md#signals)). Send closed bars only. `observe_from` (string, `YYYY-MM-DDTHH:MM:SS`; malformed or `null`: `invalid_request`) replays the request along the finest level from the first finest bar at or after it.
+
+```json
+{"id": "600000.SH@2026-11-16T10:35:00", "observe_from": "2026-11-02T09:35:00", "levels": [
+  {"name": "30m", "dt": ["…", "2026-11-16T10:30:00"], "high": […], "low": […], "close": […], "vol": […]},
+  {"name": "5m",  "dt": ["…", "2026-11-16T10:35:00"], "high": […], "low": […], "close": […], "vol": […]}
+]}
+```
 
 ## Response
 
@@ -184,6 +196,41 @@ Every `dt` labels the **end** of its bar's period, and a bar still forming carri
 }
 ```
 
+`signals`: one object with `schema` (`chanorbit.signals/1`), `id` (echo), `buy`, `sell`, `mid_support` and `observed` ([signals output](structure-contract.md#signals-output)). An example from three synthetic levels (30m, 5m, 1m), areas shortened; without the leaf level the same series answers `"stage": "turned"` with `leaf: null`:
+
+```json
+{
+  "schema": "chanorbit.signals/1",
+  "id": "nest",
+  "buy": {
+    "stage": "triggered",
+    "key": "2026-01-05T23:00:00|2026-01-06T19:00:00|2026-01-06T22:26:00",
+    "centre": {"start_at": "2026-01-05T23:00:00", "zd": 91.99, "zg": 95.01, "dd": 89.99, "gg": 104.01, "member_count": 5},
+    "departure": {"start_at": "2026-01-06T15:00:00", "end_at": "2026-01-06T19:00:00", "high": 104.01, "new_extreme": true, "area": null},
+    "pullback": {"low": 98.49, "low_at": "2026-01-06T22:26:00"},
+    "mid": {
+      "centre": {"start_at": "2026-01-06T19:40:00", "zd": 99.99, "zg": 101.51, "dd": 98.49, "gg": 102.01, "member_count": 4},
+      "entry": {"start_at": "2026-01-06T19:00:00", "end_at": "2026-01-06T19:40:00", "area": 2.8329},
+      "last": {"start_at": "2026-01-06T21:40:00", "end_at": "2026-01-06T22:30:00", "extending": false, "area": 1.1377},
+      "area_ratio": 0.4016,
+      "confirmed_at": "2026-01-06T22:35:00"
+    },
+    "leaf": {
+      "centre": {"start_at": "2026-01-06T21:52:00", "zd": 99.39, "zg": 99.81, "dd": 98.49, "gg": 99.91, "member_count": 4},
+      "entry": {"start_at": "2026-01-06T21:40:00", "end_at": "2026-01-06T21:52:00", "area": 1.5043},
+      "last": {"start_at": "2026-01-06T22:16:00", "end_at": "2026-01-06T22:26:00", "extending": false, "area": 0.3123},
+      "area_ratio": 0.2076,
+      "confirmed_at": "2026-01-06T22:28:00"
+    }
+  },
+  "sell": null,
+  "mid_support": {"low": 98.49, "low_at": "2026-01-06T22:30:00"},
+  "observed": null
+}
+```
+
+With `observe_from`, `observed` holds rows such as `{"at": "2026-01-06T22:32:00", "side": "buy", "signal": {…the buy object at that step…}}`.
+
 Every time is written as `YYYY-MM-DDTHH:MM:SS`, the same format as the input.
 
 Error response, one line, carrying the command's schema:
@@ -195,8 +242,8 @@ Error response, one line, carrying the command's schema:
 | `kind` | Cause |
 |---|---|
 | `invalid_json` | Not UTF-8, or not parseable JSON |
-| `invalid_input` | Valid JSON that is not an object; more than 200,000 bars (in one `levels` level) |
-| `invalid_request` | Object shape: missing or unknown field, repeated key, wrong type, empty `dt`, column lengths differ, `observe_from` malformed or sent to `geometry` or `levels`; for `levels`: `levels` empty, a `name` missing, empty or repeated |
+| `invalid_input` | Valid JSON that is not an object; more than 200,000 bars (in one `levels` or `signals` level) |
+| `invalid_request` | Object shape: missing or unknown field, repeated key, wrong type, empty `dt`, column lengths differ, `observe_from` malformed (or `null`) or sent to `geometry` or `levels`; for `levels`: `levels` empty, a `name` missing, empty or repeated; for `signals`: other than 2 or 3 levels, a `name` missing, empty or repeated |
 | `invalid_bar` | One bar: `dt` not in the format or earlier than the previous one, a price or volume out of range, `high < low`, `close` outside `[low, high]` |
 | `internal_error` | The computation of this request panicked (an engine defect); `message` carries the panic message. Other requests in the batch are unaffected and keep their order |
 
