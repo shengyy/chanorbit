@@ -564,3 +564,116 @@ fn signals_batch_through_the_binary() {
     assert!(out[1].contains("invalid_request"));
     assert_eq!(run_with("8").stdout, serial.stdout);
 }
+
+/// A reviewer's synthetic series: a 5m pullback whose last segment ends in
+/// a 3-bar 1m drop to 96.09 at 22:00, the 5m bottom confirmed at 22:10, and
+/// 20 rising 1m bars after the low.
+fn veto_series() -> Value {
+    let path = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/nest/veto-full.json.gz");
+    let mut text = String::new();
+    use std::io::Read;
+    flate2::read::GzDecoder::new(std::fs::File::open(path).unwrap())
+        .read_to_string(&mut text)
+        .unwrap();
+    serde_json::from_str(&text).unwrap()
+}
+
+/// The 1m move into the low is still the unfinished segment, with the 1m
+/// level cut at the low (30m and 5m whole, as the reviewer sent it) and 20
+/// bars later: C waits, so the nest stays `turned` with no `leaf_centre`
+/// instead of reading "no centre" from an unsettled leaf.
+#[test]
+fn the_leaf_veto_waits_for_the_low_stroke() {
+    let full = veto_series();
+    let mut cut = full.clone();
+    for field in ["dt", "high", "low", "close", "vol"] {
+        cut["levels"][2][field]
+            .as_array_mut()
+            .unwrap()
+            .truncate(2760);
+    }
+    assert_eq!(cut["levels"][2]["dt"][2759], "2026-01-06T22:00:00");
+    for request in [cut, full] {
+        let b = buy(&request);
+        assert_eq!(
+            b["key"],
+            "2026-01-05T23:00:00|2026-01-06T19:00:00|2026-01-06T22:00:00"
+        );
+        assert_eq!(b["mid"]["confirmed_at"], "2026-01-06T22:10:00");
+        assert_eq!(
+            (&b["stage"], &b["leaf_centre"], &b["leaf"]),
+            (&json!("turned"), &Value::Null, &Value::Null)
+        );
+    }
+}
+
+fn rank(stage: &Value) -> usize {
+    ["armed", "primed", "ripe", "turned", "triggered"]
+        .iter()
+        .position(|s| stage == s)
+        .unwrap()
+}
+
+/// Over every truncation from `from` on: within a key the stage only moves
+/// forward, and once C has been evaluated `leaf_centre` keeps its value.
+fn veto_is_stable(request: &Value, from: usize) -> usize {
+    let finest = request["levels"][2]["dt"].as_array().unwrap().clone();
+    let mut seen: std::collections::HashMap<String, (usize, Value)> = Default::default();
+    let mut evaluated = 0;
+    for t in &finest[from..] {
+        let b = buy(&truncated(request, t.as_str().unwrap()));
+        if b.is_null() {
+            continue;
+        }
+        let key = b["key"].as_str().unwrap().to_string();
+        let (r, centre) = (rank(&b["stage"]), b["leaf_centre"].clone());
+        if let Some((r0, c0)) = seen.get(&key) {
+            assert!(r >= *r0, "{t}: {key} went back to {}", b["stage"]);
+            if !c0.is_null() {
+                assert_eq!(&centre, c0, "{t}: {key}");
+            }
+        }
+        evaluated += usize::from(!centre.is_null());
+        let keep = if centre.is_null() {
+            seen.get(&key).map_or(Value::Null, |x| x.1.clone())
+        } else {
+            centre
+        };
+        seen.insert(key, (r, keep));
+    }
+    evaluated
+}
+
+#[test]
+fn the_leaf_veto_never_changes_within_a_key() {
+    let rally = [
+        (98.0, 20),
+        (99.0, 8),
+        (98.4, 8),
+        (99.4, 8),
+        (98.8, 8),
+        (99.8, 8),
+        (99.2, 8),
+        (100.5, 8),
+        (99.9, 8),
+        (101.0, 8),
+    ];
+    let sharp = vec![
+        (99.0, 40),
+        (102.0, 40),
+        (100.0, 40),
+        (101.5, 40),
+        (98.5, 40),
+    ];
+    assert_eq!(veto_is_stable(&veto_series(), 2740), 0);
+    let mut evaluated = 0;
+    for m in [
+        base(),
+        buy_path(95.0, pullback(97.0, 25), &rally),
+        buy_path(95.0, pullback(97.0, 28), &rally),
+        buy_path(95.0, sharp, &rally),
+    ] {
+        evaluated += veto_is_stable(&request(&m, true), 2760);
+    }
+    assert!(evaluated > 0);
+}

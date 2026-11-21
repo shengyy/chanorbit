@@ -161,6 +161,14 @@ impl<'a> LevelRead<'a> {
         })
     }
 
+    /// Whether the element holding the bar at `t` is a counted stroke, so the
+    /// structure up to `t` is settled.
+    pub(crate) fn counted_at(&self, t: NaiveDateTime) -> bool {
+        let k = self.c.strokes().partition_point(|x| x.start_at() < t);
+        k.checked_sub(1)
+            .is_some_and(|k| k < self.finished && t <= self.seg(k).end_at)
+    }
+
     /// Whether a qualified centre forms among the counted strokes (as read)
     /// that start at or after `from` and end at or before `to`, with no
     /// alignment or entry rule.
@@ -675,8 +683,9 @@ pub fn buy(
         .and_then(|(l, t0)| completion_to(l, t0, low.at, Direction::Down))
         .filter(|c| c.extreme.price == low.price);
     let turned = mid.as_ref().is_some_and(|c| c.fact.confirmed_at.is_some());
+    // C waits until the leaf element holding the low is a counted stroke.
     let leaf_centre = leaf_span
-        .filter(|_| turned)
+        .filter(|(l, _)| turned && l.counted_at(low.at))
         .map(|(l, t0)| l.centre_within(t0, low.at));
     let stage = match (&mid, leaf_centre) {
         (Some(_), Some(centre)) if leaf.is_some() || !centre => Stage::Triggered,
