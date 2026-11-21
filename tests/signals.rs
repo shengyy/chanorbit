@@ -95,9 +95,11 @@ fn the_leaf_waits_for_the_mid_bottom() {
     assert_eq!(before["stage"], "ripe");
     assert_eq!(before["mid"]["last"]["extending"], true);
     assert_eq!(before["leaf"]["confirmed_at"], "2026-01-06T22:28:00");
-    assert_eq!(before["leaf_centre"], true);
+    // C is not evaluated before the 5m bottom confirms.
+    assert_eq!(before["leaf_centre"], Value::Null);
     let after = buy(&request(&cut(&m, 2795), true));
     assert_eq!(after["stage"], "triggered");
+    assert_eq!(after["leaf_centre"], true);
     assert_eq!(after["mid"]["confirmed_at"], "2026-01-06T22:35:00");
     assert_eq!(before["key"], after["key"]);
 }
@@ -134,15 +136,43 @@ fn the_leaf_vetoes_only_a_leaf_still_gaining() {
     let diverging = leaf(28);
     assert_eq!(diverging["stage"], "triggered");
     assert!(diverging["leaf"]["area_ratio"].as_f64().unwrap() < 1.0);
-    // Without the leaf level there is nothing to say about a leaf centre.
+    // Without the leaf level C is not evaluated.
     let two = buy(&request(
         &buy_path(95.0, pullback(97.0, 25), &[(98.0, 20)]),
         false,
     ));
     assert_eq!(
         (&two["stage"], &two["leaf_centre"]),
-        (&json!("turned"), &json!(false))
+        (&json!("turned"), &Value::Null)
     );
+}
+
+/// C reads the leaf only up to the low: a rally after it that builds 1m up
+/// centres (below `H_dep`, no new low) leaves the key, `leaf_centre` and
+/// the stage as they were, `turned` (leaf still gaining) and `triggered`.
+#[test]
+fn a_rally_after_the_low_does_not_move_the_leaf_veto() {
+    let rally = [
+        (98.0, 20),
+        (99.0, 8),
+        (98.4, 8),
+        (99.4, 8),
+        (98.8, 8),
+        (99.8, 8),
+        (99.2, 8),
+        (100.5, 8),
+        (99.9, 8),
+        (101.0, 8),
+    ];
+    for (bars, want) in [(25, "turned"), (28, "triggered")] {
+        let pull = || pullback(97.0, bars);
+        let at = buy(&request(&buy_path(95.0, pull(), &rally[..1]), true));
+        let later = buy(&request(&buy_path(95.0, pull(), &rally), true));
+        assert_eq!(at["stage"], want);
+        for field in ["stage", "key", "leaf_centre", "leaf"] {
+            assert_eq!(later[field], at[field], "{bars} {field}");
+        }
+    }
 }
 
 /// A5 over 30m legs of 240 bars from the flat start: an earlier 30m centre

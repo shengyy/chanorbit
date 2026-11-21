@@ -231,7 +231,7 @@ Every `dt` labels the **end** of its bar's period, and a bar still forming carri
 }
 ```
 
-Cut at `2026-01-06T22:00:00`, before the new low, the same series answers `"stage": "primed"` with `pullback.low` 98.99 and the move in progress as `mid` (`leaf: null`, `leaf_centre: false`):
+Cut at `2026-01-06T22:00:00`, before the new low, the same series answers `"stage": "primed"` with `pullback.low` 98.99 and the move in progress as `mid` (`leaf: null`, `leaf_centre: null`):
 
 ```json
 "mid": {

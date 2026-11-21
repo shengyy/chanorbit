@@ -161,6 +161,22 @@ impl<'a> LevelRead<'a> {
         })
     }
 
+    /// Whether a qualified centre forms among the counted strokes (as read)
+    /// that start at or after `from` and end at or before `to`, with no
+    /// alignment or entry rule.
+    pub(crate) fn centre_within(&self, from: NaiveDateTime, to: NaiveDateTime) -> bool {
+        let s = self.c.strokes();
+        let k0 = s.partition_point(|x| x.start_at() < from);
+        let k1 = (k0..self.finished)
+            .take_while(|&k| self.seg(k).end_at <= to)
+            .last()
+            .map_or(k0, |k| k + 1);
+        let sub = read_strokes(s, k0, k1, self.extension);
+        canonical_centres(&sub)
+            .iter()
+            .any(|z| z.member_count() >= 3 && z.members_touch_core(&sub))
+    }
+
     /// The qualified centres over the counted strokes.
     pub(crate) fn qualified_centres(&self) -> Vec<Centre> {
         let fs = read_strokes(self.c.strokes(), 0, self.finished, self.extension);
@@ -317,11 +333,14 @@ impl Local {
     }
 }
 
+/// `before`: the span ends at its extreme, so a stroke starting at `until`
+/// (the move after the extreme) is left out.
 fn local(
     r: &LevelRead,
     from: NaiveDateTime,
     until: Option<NaiveDateTime>,
     dir: Direction,
+    before: bool,
 ) -> Option<Local> {
     let s = r.c.strokes();
     let n = s.len();
@@ -331,7 +350,9 @@ fn local(
     if first.start_at() != from || first.direction != dir {
         return None;
     }
-    let k1 = until.map_or(n, |u| s.partition_point(|x| x.start_at() <= u));
+    let k1 = until.map_or(n, |u| {
+        s.partition_point(|x| x.start_at() < u || (!before && x.start_at() == u))
+    });
     let sub = read_strokes(s, k0, k1.min(r.finished).max(k0), r.extension);
     // 1. The last qualified centre of the local sequence, entered in `dir`.
     let z = canonical_centres(&sub)
@@ -401,8 +422,29 @@ pub fn completion(
     until: Option<NaiveDateTime>,
     dir: Direction,
 ) -> Option<Completion> {
+    completion_in(r, from, until, dir, false)
+}
+
+/// The completion of the move from `from` that ends at its extreme at
+/// `to`: nothing after `to` enters it.
+fn completion_to(
+    r: &LevelRead,
+    from: NaiveDateTime,
+    to: NaiveDateTime,
+    dir: Direction,
+) -> Option<Completion> {
+    completion_in(r, from, Some(to), dir, true)
+}
+
+fn completion_in(
+    r: &LevelRead,
+    from: NaiveDateTime,
+    until: Option<NaiveDateTime>,
+    dir: Direction,
+    before: bool,
+) -> Option<Completion> {
     let n = r.n();
-    let loc = local(r, from, until, dir)?;
+    let loc = local(r, from, until, dir, before)?;
     // 2. The element holding the span's extreme leaves the centre to a new
     // extreme beyond every other member.
     let ext = span_extreme(r, from, until, dir)?;
@@ -441,7 +483,7 @@ pub fn completion(
 /// completed: items 0–1 hold, and `last` is the latest element when it runs
 /// in `dir` from the departure position; `None` without the local centre.
 pub fn progress(r: &LevelRead, from: NaiveDateTime, dir: Direction) -> Option<MoveFact> {
-    let loc = local(r, from, None, dir)?;
+    let loc = local(r, from, None, dir, false)?;
     let n = r.n();
     let latest = match r.unfinished {
         Some(u) => (n, u),
@@ -512,9 +554,9 @@ pub struct Buy {
     pub pullback: Pullback,
     pub mid: Option<MoveFact>,
     pub leaf: Option<CompletionFact>,
-    /// Whether the leaf span holds a local centre (items 0–1 on the leaf);
-    /// `false` without the leaf level or before B holds.
-    pub leaf_centre: bool,
+    /// Whether a qualified leaf centre lies inside the leaf span up to the
+    /// low; `null` when C is not evaluated.
+    pub leaf_centre: Option<bool>,
 }
 
 /// A1 on the parent level: the latest qualified centre departed upward
@@ -619,8 +661,10 @@ pub fn buy(
     let mid = t0
         .and_then(|t0| completion(m, t0, None, Direction::Down))
         .filter(|c| c.extreme.price == low.price);
-    // C, a veto on the leaf: the middle level's last segment completes there
-    // at the low, or holds no leaf local centre at all.
+    // C, a veto on the leaf over the down move from the start of the middle
+    // level's last segment to the low (the finest level is the leaf, so the
+    // low's time is a leaf time): it completes there at the low, or no leaf
+    // centre lies inside it.
     let leaf_span = match (&mid, l) {
         (Some(mid), Some(l)) => {
             covered_child(m.raw(), l.raw(), mid.last.start_at, true).map(|t0| (l, t0))
@@ -628,16 +672,17 @@ pub fn buy(
         _ => None,
     };
     let leaf = leaf_span
-        .and_then(|(l, t0)| completion(l, t0, None, Direction::Down))
+        .and_then(|(l, t0)| completion_to(l, t0, low.at, Direction::Down))
         .filter(|c| c.extreme.price == low.price);
-    let leaf_centre =
-        leaf_span.is_some_and(|(l, t0)| local(l, t0, None, Direction::Down).is_some());
-    let c_holds = leaf_span.is_some() && (leaf.is_some() || !leaf_centre);
-    let stage = match &mid {
-        Some(mid) if mid.fact.confirmed_at.is_some() && c_holds => Stage::Triggered,
-        Some(mid) if mid.fact.confirmed_at.is_some() => Stage::Turned,
-        Some(_) => Stage::Ripe,
-        None => Stage::Armed,
+    let turned = mid.as_ref().is_some_and(|c| c.fact.confirmed_at.is_some());
+    let leaf_centre = leaf_span
+        .filter(|_| turned)
+        .map(|(l, t0)| l.centre_within(t0, low.at));
+    let stage = match (&mid, leaf_centre) {
+        (Some(_), Some(centre)) if leaf.is_some() || !centre => Stage::Triggered,
+        (Some(_), _) if turned => Stage::Turned,
+        (Some(_), _) => Stage::Ripe,
+        (None, _) => Stage::Armed,
     };
     // Without B the move in progress, primed once its latest element leaves
     // the local centre downward.
@@ -677,46 +722,5 @@ pub fn buy(
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::analyzer::Config;
-    use crate::macd::raw_macd;
-    use crate::power::interval_power;
-
-    /// The area read here is the interval power's same-direction area, for
-    /// every stroke and for intervals inside the MACD warm-up.
-    #[test]
-    fn area_is_the_interval_power_area() {
-        let t0 = crate::contract::parse_dt("2026-01-05T09:35:00").unwrap();
-        let mut price = 100.0_f64;
-        let bars: Vec<RawBar> = (0..900)
-            .map(|i| {
-                let from = price;
-                price += if (i / 9) % 2 == 0 { 0.37 } else { -0.31 };
-                RawBar {
-                    dt: t0 + chrono::Duration::minutes(5 * i),
-                    high: from.max(price) + 0.05,
-                    low: from.min(price) - 0.05,
-                    close: price,
-                    vol: 1.0,
-                }
-            })
-            .collect();
-        let c = Analyzer::from_bars(bars, Config::default());
-        let macd = raw_macd(&c);
-        let r = LevelRead::new(&c, &macd);
-        assert!(r.n() > 40);
-        let mut ready = 0;
-        for k in 0..r.n() {
-            let s = r.seg(k);
-            let power = interval_power(&c, &macd, s.start_at, s.end_at).macd;
-            let want = match s.direction {
-                Direction::Up => power.positive_area,
-                Direction::Down => power.negative_area,
-            };
-            assert_eq!(r.area(&s).map(f64::to_bits), want.map(f64::to_bits), "{k}");
-            ready += usize::from(want.is_some());
-        }
-        assert!(ready > 0 && ready < r.n());
-    }
-}
+#[path = "signal_tests.rs"]
+mod tests;
