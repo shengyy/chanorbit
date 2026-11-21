@@ -14,14 +14,17 @@ chanOrbit computes Chan-theory stroke structure from a bar sequence and returns 
 | Power | MACD(12, 26, 9) and per-interval histogram areas, end values, sample counts and mean volume |
 | Candidate | Display-only candidate segment after the last stroke, with its power windows |
 | Stages | Confirmed buy-side second, third and second-like stages of the last input, with first-known time, age and what followed the retest, from a per-input replay |
-| Output | One geometry snapshot or one stage list per request, carrying only fields a consumer reads, each fact once |
+| Levels | Per-level structure facts of one instrument over several period series and each finer level's placement inside the next coarser one |
+| Nests | Over 2 or 3 period series: the buy-side third-buy nest (a parent third-buy retest whose pullback completes on the middle level and, optionally, on the leaf level, with its stage) and the sell-side up-end nest (the middle level's latest up segment completing on the leaf level, with divergence and parent attributes), and a per-bar replay along the finest level recording when each nest stage first stood |
+| Output | One geometry snapshot, stage list, levels list or nest answer per request, carrying only fields a consumer reads, each fact once |
 
 Definitions are in [docs/structure-contract.md](docs/structure-contract.md), the command line in [docs/cli-contract.md](docs/cli-contract.md).
 
 ## Non-goals
 
 - Segments (线段) and recursive trend types (走势类型).
-- Trading signals or decisions; sell-side stages, first points as output, and stages whose retest stroke has not formed.
+- Trading decisions, prices, sizes or thresholds; the nests are structure descriptions, and every decision taken from them is the caller's.
+- Sell-side stages in `stages`, first points as output, and stages whose retest stroke has not formed.
 - Backtesting, positions, order handling or any trader.
 - Data download, storage or price adjustment.
 - A general technical-indicator library.

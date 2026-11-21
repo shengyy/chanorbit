@@ -112,10 +112,11 @@ fn version_usage_and_exit_codes() {
     let text = String::from_utf8(out.stdout).unwrap();
     assert!(text.starts_with("chanorbit ") && text.contains(chanorbit::contract::SCHEMA));
     assert!(text.trim_end().ends_with(&format!(
-        "schemas {} {} {}",
+        "schemas {} {} {} {}",
         chanorbit::contract::SCHEMA,
         chanorbit::contract::STAGES_SCHEMA,
-        chanorbit::contract::LEVELS_SCHEMA
+        chanorbit::contract::LEVELS_SCHEMA,
+        chanorbit::contract::SIGNALS_SCHEMA
     )));
     let out = chanorbit(&["geometry", "--bogus"], "");
     assert_eq!(out.status.code(), Some(2));

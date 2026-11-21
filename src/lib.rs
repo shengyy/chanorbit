@@ -1,6 +1,7 @@
 //! chanOrbit: inclusion processing, fractals, strokes, stroke centres, MACD
 //! interval power, the structure geometry snapshot, the buy-side stages
-//! with their per-bar observation, and multi-level structure facts. Pure
+//! with their per-bar observation, multi-level structure facts and the
+//! buy- and sell-side nest signals. Pure
 //! computation: no I/O, no clock, no environment lookups. Definitions are owned by
 //! `docs/structure-contract.md`.
 
@@ -14,9 +15,13 @@ pub mod geometry;
 pub mod levels;
 pub mod levels_child;
 pub mod levels_compare;
+pub mod levels_state;
 pub mod macd;
 pub mod observe;
 pub mod power;
+pub mod signal;
+pub mod signal_observe;
+pub mod signal_sell;
 pub mod stage;
 pub mod stroke;
 

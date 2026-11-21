@@ -1,10 +1,12 @@
 //! `chanorbit` command line: JSON on stdin, JSON on stdout. See docs/cli-contract.md.
-use chanorbit::contract::{Command, LEVELS_SCHEMA, SCHEMA, STAGES_SCHEMA, handle_bytes};
+use chanorbit::contract::{
+    Command, LEVELS_SCHEMA, SCHEMA, SIGNALS_SCHEMA, STAGES_SCHEMA, handle_bytes,
+};
 use std::io::{Read, Write};
 use std::process::ExitCode;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-const USAGE: &str = "usage: chanorbit geometry|stages|levels [--batch [--jobs N]]\n       chanorbit --version\n       chanorbit --help";
+const USAGE: &str = "usage: chanorbit geometry|stages|levels|signals [--batch [--jobs N]]\n       chanorbit --version\n       chanorbit --help";
 
 /// All responses written and successful.
 const EXIT_OK: u8 = 0;
@@ -37,15 +39,16 @@ fn report(message: &str) {
 fn parse_args(args: &[String]) -> Result<Parsed, String> {
     match args.first().map(String::as_str) {
         Some("--version" | "-V") if args.len() == 1 => Ok(Parsed::Print(format!(
-            "chanorbit {} schemas {SCHEMA} {STAGES_SCHEMA} {LEVELS_SCHEMA}",
+            "chanorbit {} schemas {SCHEMA} {STAGES_SCHEMA} {LEVELS_SCHEMA} {SIGNALS_SCHEMA}",
             env!("CARGO_PKG_VERSION")
         ))),
         Some("--help" | "-h") if args.len() == 1 => Ok(Parsed::Print(USAGE.into())),
-        Some(name @ ("geometry" | "stages" | "levels")) => {
+        Some(name @ ("geometry" | "stages" | "levels" | "signals")) => {
             let mut parsed = Args {
                 command: match name {
                     "stages" => Command::Stages,
                     "levels" => Command::Levels,
+                    "signals" => Command::Signals,
                     _ => Command::Geometry,
                 },
                 batch: false,
