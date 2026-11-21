@@ -20,14 +20,14 @@ const KEY_TIME: &str = "%Y-%m-%dT%H:%M:%S";
 /// series that starts with this level's raw bars: MACD is causal, so its
 /// values over this level's bars are the same.
 pub struct LevelRead<'a> {
-    c: &'a Analyzer,
+    pub(crate) c: &'a Analyzer,
     macd: &'a MacdSeries,
     /// The last stroke's current extreme while it extends.
     extension: Option<Endpoint>,
     /// Strokes counted for centres (the extending last stroke as read).
-    finished: usize,
-    unfinished: Option<Seg>,
-    after: Option<Seg>,
+    pub(crate) finished: usize,
+    pub(crate) unfinished: Option<Seg>,
+    pub(crate) after: Option<Seg>,
 }
 
 impl<'a> LevelRead<'a> {
@@ -55,12 +55,12 @@ impl<'a> LevelRead<'a> {
         self.c.raw_bars()
     }
 
-    fn n(&self) -> usize {
+    pub(crate) fn n(&self) -> usize {
         self.c.strokes().len()
     }
 
     /// Stroke `k`, the last one read to its current extreme while it extends.
-    fn seg(&self, k: usize) -> Seg {
+    pub(crate) fn seg(&self, k: usize) -> Seg {
         let s = &self.c.strokes()[k];
         let end = match self.extension {
             Some(x) if k + 1 == self.n() => x,
@@ -87,14 +87,14 @@ impl<'a> LevelRead<'a> {
 
     /// Whether element `k` is still moving: the extending last stroke or the
     /// unfinished segment.
-    fn moving(&self, k: usize) -> bool {
+    pub(crate) fn moving(&self, k: usize) -> bool {
         k == self.n() || (k + 1 == self.n() && self.extension.is_some())
     }
 
     /// The same-direction MACD area of the interval power over
     /// `(start_at, end_at]` (positive area for up, negative for down), or
     /// `None` when that power is unavailable.
-    fn area(&self, s: &Seg) -> Option<f64> {
+    pub(crate) fn area(&self, s: &Seg) -> Option<f64> {
         let raw = self.raw();
         if s.start_at >= s.end_at {
             return None;
@@ -128,7 +128,12 @@ impl<'a> LevelRead<'a> {
     /// Confirmation time of the first `mark` fractal at `ext`'s price from
     /// its time on, among the fractals from stroke `from` on and the
     /// unfinished ones.
-    fn confirmed(&self, from: usize, mark: Mark, ext: Endpoint) -> Option<NaiveDateTime> {
+    pub(crate) fn confirmed(
+        &self,
+        from: usize,
+        mark: Mark,
+        ext: Endpoint,
+    ) -> Option<NaiveDateTime> {
         let hit = |f: &&Fractal| f.mark == mark && f.price == ext.price && f.dt >= ext.at;
         let s = self.c.strokes();
         s[from.min(s.len())..]
@@ -147,7 +152,7 @@ impl<'a> LevelRead<'a> {
 
     /// The latest up element (stroke as read, or the unfinished segment)
     /// whose high no later raw bar exceeds, with its element index.
-    fn latest_up(&self) -> Option<(usize, Seg)> {
+    pub(crate) fn latest_up(&self) -> Option<(usize, Seg)> {
         let raw = self.raw();
         (0..=self.n()).rev().find_map(|k| {
             let s = self.element(k).filter(|s| s.direction == Direction::Up)?;
@@ -157,7 +162,7 @@ impl<'a> LevelRead<'a> {
     }
 
     /// The qualified centres over the counted strokes.
-    fn qualified_centres(&self) -> Vec<Centre> {
+    pub(crate) fn qualified_centres(&self) -> Vec<Centre> {
         let fs = read_strokes(self.c.strokes(), 0, self.finished, self.extension);
         canonical_centres(&fs)
             .into_iter()
@@ -168,7 +173,7 @@ impl<'a> LevelRead<'a> {
 
 /// The child time of a parent point, only when the child series covers the
 /// whole parent bar: its first bar is not after the parent bar's start.
-fn covered_child(
+pub(crate) fn covered_child(
     parent: &[RawBar],
     child: &[RawBar],
     at: NaiveDateTime,
@@ -186,7 +191,7 @@ fn covered_child(
     child_time(parent, child, at, high).map(|c| c.0)
 }
 
-fn beyond(d: Direction, p: f64, than: f64) -> bool {
+pub(crate) fn beyond(d: Direction, p: f64, than: f64) -> bool {
     match d {
         Direction::Up => p > than,
         Direction::Down => p < than,
@@ -194,7 +199,7 @@ fn beyond(d: Direction, p: f64, than: f64) -> bool {
 }
 
 /// The end price of `s` on side `d`: its high for up, its low for down.
-fn side_price(s: &Seg, d: Direction) -> f64 {
+pub(crate) fn side_price(s: &Seg, d: Direction) -> f64 {
     match d {
         Direction::Up => s.start_price.max(s.end_price),
         Direction::Down => s.start_price.min(s.end_price),
@@ -228,7 +233,7 @@ impl From<&Centre> for CentreFact {
 pub struct EntryFact {
     pub start_at: NaiveDateTime,
     pub end_at: NaiveDateTime,
-    pub area: f64,
+    pub area: Option<f64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -236,7 +241,7 @@ pub struct LastFact {
     pub start_at: NaiveDateTime,
     pub end_at: NaiveDateTime,
     pub extending: bool,
-    pub area: f64,
+    pub area: Option<f64>,
 }
 
 /// A completed move: its local centre, entry, last segment, their area
@@ -250,6 +255,32 @@ pub struct CompletionFact {
     pub confirmed_at: Option<NaiveDateTime>,
 }
 
+/// A move in progress around its local centre: `last` is the latest
+/// element when it runs in the move's direction from the departure
+/// position, `new_extreme` whether it holds the span's extreme.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct MoveFact {
+    pub centre: CentreFact,
+    pub entry: EntryFact,
+    pub last: Option<LastFact>,
+    pub new_extreme: bool,
+    pub area_ratio: Option<f64>,
+    pub confirmed_at: Option<NaiveDateTime>,
+}
+
+impl From<CompletionFact> for MoveFact {
+    fn from(c: CompletionFact) -> Self {
+        Self {
+            centre: c.centre,
+            entry: c.entry,
+            last: Some(c.last),
+            new_extreme: true,
+            area_ratio: Some(c.area_ratio),
+            confirmed_at: c.confirmed_at,
+        }
+    }
+}
+
 /// A completion with what the nests read from it.
 pub struct Completion {
     pub fact: CompletionFact,
@@ -258,15 +289,40 @@ pub struct Completion {
     pub last: Seg,
 }
 
-/// `completion(level, span, dir)`: the move in direction `dir` over the
-/// span from `from` (the start of its first stroke) to `until` (the last
-/// input when `None`) has completed (items 1–3); `confirmed_at` is item 4.
-pub fn completion(
+/// Items 0–1 of a move over a span: the strokes `k0..k1` starting inside
+/// it, the last qualified centre of their local sequence (members
+/// `first..=last`) and its entry, which runs in the move's direction.
+struct Local {
+    k0: usize,
+    k1: usize,
+    centre: Centre,
+    first: usize,
+    last: usize,
+    entry: Seg,
+}
+
+impl Local {
+    /// Whether element `k` sits where it leaves the centre: its last member
+    /// from the fourth on, or the element right after the last member.
+    fn departs(&self, k: usize) -> bool {
+        (k == self.last && k >= self.first + 3) || k == self.last + 1
+    }
+
+    /// Whether `x`, element `k` holding `ext`, reaches a new extreme
+    /// beyond every other member.
+    fn new_extreme(&self, r: &LevelRead, k: usize, ext: Endpoint, dir: Direction) -> bool {
+        (self.first..=self.last)
+            .filter(|&i| i != k)
+            .all(|i| beyond(dir, ext.price, side_price(&r.seg(i), dir)))
+    }
+}
+
+fn local(
     r: &LevelRead,
     from: NaiveDateTime,
     until: Option<NaiveDateTime>,
     dir: Direction,
-) -> Option<Completion> {
+) -> Option<Local> {
     let s = r.c.strokes();
     let n = s.len();
     // 0. The strokes starting inside the span; the first starts at its start.
@@ -283,56 +339,96 @@ pub fn completion(
         .rfind(|z| z.member_count() >= 3 && z.members_touch_core(&sub))?;
     let (first_member, last_member) = (k0 + z.start, k0 + z.end - 1);
     let entry = r.seg(first_member - 1);
-    if entry.direction != dir {
-        return None;
-    }
-    // 2. The element holding the span's extreme leaves the centre to a new
-    // extreme beyond every other member.
+    (entry.direction == dir).then_some(Local {
+        k0,
+        k1,
+        centre: z,
+        first: first_member,
+        last: last_member,
+        entry,
+    })
+}
+
+/// The span's extreme in direction `dir` over the raw bars after `from` up
+/// to `until` (the last input when `None`).
+fn span_extreme(
+    r: &LevelRead,
+    from: NaiveDateTime,
+    until: Option<NaiveDateTime>,
+    dir: Direction,
+) -> Option<Endpoint> {
     let raw = r.raw();
     let end = until.or(raw.last().map(|b| b.dt))?;
     let a = raw.partition_point(|b| b.dt <= from);
     let b = raw.partition_point(|b| b.dt <= end).max(a);
-    let ext = extreme(&raw[a..b], dir)?;
-    let holds = |x: &Seg| x.start_at < ext.at && ext.at <= x.end_at;
-    let (xi, x) = (k0..k1)
-        .map(|k| (k, r.seg(k)))
-        .find(|(_, x)| holds(x))
-        .or_else(|| r.unfinished.filter(|u| k1 == n && holds(u)).map(|u| (n, u)))?;
-    let departs = (xi == last_member && xi >= first_member + 3) || xi == last_member + 1;
-    if x.direction != dir || !departs {
-        return None;
+    extreme(&raw[a..b], dir)
+}
+
+fn holds(x: &Seg, ext: Endpoint) -> bool {
+    x.start_at < ext.at && ext.at <= x.end_at
+}
+
+fn opposite_mark(dir: Direction) -> Mark {
+    match dir {
+        Direction::Down => Mark::Bottom,
+        Direction::Up => Mark::Top,
     }
-    let new_extreme = (first_member..=last_member)
-        .filter(|&i| i != xi)
-        .all(|i| beyond(dir, ext.price, side_price(&r.seg(i), dir)));
-    if !new_extreme {
+}
+
+fn entry_fact(entry: &Seg, area: Option<f64>) -> EntryFact {
+    EntryFact {
+        start_at: entry.start_at,
+        end_at: entry.end_at,
+        area,
+    }
+}
+
+fn last_fact(r: &LevelRead, k: usize, x: &Seg, area: Option<f64>) -> LastFact {
+    LastFact {
+        start_at: x.start_at,
+        end_at: x.end_at,
+        extending: r.moving(k),
+        area,
+    }
+}
+
+/// `completion(level, span, dir)`: the move in direction `dir` over the
+/// span from `from` (the start of its first stroke) to `until` (the last
+/// input when `None`) has completed (items 1–3); `confirmed_at` is item 4.
+pub fn completion(
+    r: &LevelRead,
+    from: NaiveDateTime,
+    until: Option<NaiveDateTime>,
+    dir: Direction,
+) -> Option<Completion> {
+    let n = r.n();
+    let loc = local(r, from, until, dir)?;
+    // 2. The element holding the span's extreme leaves the centre to a new
+    // extreme beyond every other member.
+    let ext = span_extreme(r, from, until, dir)?;
+    let (xi, x) = (loc.k0..loc.k1)
+        .map(|k| (k, r.seg(k)))
+        .find(|(_, x)| holds(x, ext))
+        .or_else(|| {
+            r.unfinished
+                .filter(|u| loc.k1 == n && holds(u, ext))
+                .map(|u| (n, u))
+        })?;
+    if x.direction != dir || !loc.departs(xi) || !loc.new_extreme(r, xi, ext, dir) {
         return None;
     }
     // 3. Divergence: the last segment's same-direction area is smaller.
-    let (entry_area, last_area) = (r.area(&entry)?, r.area(&x)?);
+    let (entry_area, last_area) = (r.area(&loc.entry)?, r.area(&x)?);
     if last_area.partial_cmp(&entry_area) != Some(std::cmp::Ordering::Less) {
         return None;
     }
     // 4. The opposite fractal at the extreme.
-    let mark = match dir {
-        Direction::Down => Mark::Bottom,
-        Direction::Up => Mark::Top,
-    };
-    let confirmed_at = r.confirmed(xi, mark, ext);
+    let confirmed_at = r.confirmed(xi, opposite_mark(dir), ext);
     Some(Completion {
         fact: CompletionFact {
-            centre: CentreFact::from(&z),
-            entry: EntryFact {
-                start_at: entry.start_at,
-                end_at: entry.end_at,
-                area: entry_area,
-            },
-            last: LastFact {
-                start_at: x.start_at,
-                end_at: x.end_at,
-                extending: r.moving(xi),
-                area: last_area,
-            },
+            centre: CentreFact::from(&loc.centre),
+            entry: entry_fact(&loc.entry, Some(entry_area)),
+            last: last_fact(r, xi, &x, Some(last_area)),
             area_ratio: last_area / entry_area,
             confirmed_at,
         },
@@ -341,10 +437,52 @@ pub fn completion(
     })
 }
 
+/// The move over the span from `from` to the last input while it has not
+/// completed: items 0–1 hold, and `last` is the latest element when it runs
+/// in `dir` from the departure position; `None` without the local centre.
+pub fn progress(r: &LevelRead, from: NaiveDateTime, dir: Direction) -> Option<MoveFact> {
+    let loc = local(r, from, None, dir)?;
+    let n = r.n();
+    let latest = match r.unfinished {
+        Some(u) => (n, u),
+        None => (n - 1, r.seg(n - 1)),
+    };
+    let entry_area = r.area(&loc.entry);
+    let candidate = Some(latest).filter(|(k, x)| x.direction == dir && loc.departs(*k));
+    let (last, new_extreme, area_ratio, confirmed_at) = match candidate {
+        Some((k, x)) => {
+            let area = r.area(&x);
+            let ext = span_extreme(r, from, None, dir)
+                .filter(|&e| holds(&x, e) && loc.new_extreme(r, k, e, dir));
+            let ratio = match (area, entry_area) {
+                (Some(a), Some(e)) if e > 0. => Some(a / e),
+                _ => None,
+            };
+            let confirmed = ext.and_then(|e| r.confirmed(k, opposite_mark(dir), e));
+            (
+                Some(last_fact(r, k, &x, area)),
+                ext.is_some(),
+                ratio,
+                confirmed,
+            )
+        }
+        None => (None, false, None, None),
+    };
+    Some(MoveFact {
+        centre: CentreFact::from(&loc.centre),
+        entry: entry_fact(&loc.entry, entry_area),
+        last,
+        new_extreme,
+        area_ratio,
+        confirmed_at,
+    })
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Stage {
     Armed,
+    Primed,
     Ripe,
     Turned,
     Triggered,
@@ -372,7 +510,7 @@ pub struct Buy {
     pub centre: CentreFact,
     pub departure: DepartureFact,
     pub pullback: Pullback,
-    pub mid: Option<CompletionFact>,
+    pub mid: Option<MoveFact>,
     pub leaf: Option<CompletionFact>,
 }
 
@@ -463,7 +601,8 @@ pub fn buy(
         return None;
     }
     // B: the pullback completes on the middle level at the low.
-    let mid = covered_child(p.raw(), m.raw(), d.end_at, true)
+    let t0 = covered_child(p.raw(), m.raw(), d.end_at, true);
+    let mid = t0
         .and_then(|t0| completion(m, t0, None, Direction::Down))
         .filter(|c| c.extreme.price == low.price);
     // C: the middle level's last segment completes on the leaf, confirmed.
@@ -478,6 +617,16 @@ pub fn buy(
         (Some(mid), _) if mid.fact.confirmed_at.is_some() => Stage::Turned,
         (Some(_), _) => Stage::Ripe,
         (None, _) => Stage::Armed,
+    };
+    // Without B the move in progress, primed once its latest element leaves
+    // the local centre downward.
+    let mid = match mid {
+        Some(c) => Some(MoveFact::from(c.fact)),
+        None => t0.and_then(|t0| progress(m, t0, Direction::Down)),
+    };
+    let stage = match &mid {
+        Some(x) if stage == Stage::Armed && x.last.is_some() => Stage::Primed,
+        _ => stage,
     };
     let z = &dep.centre;
     Some(Buy {
@@ -501,120 +650,8 @@ pub fn buy(
             low_at: low.at,
         },
         leaf: leaf.map(|c| c.fact),
-        mid: mid.map(|c| c.fact),
+        mid,
     })
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize)]
-pub struct SegmentFact {
-    pub start_at: NaiveDateTime,
-    pub end_at: NaiveDateTime,
-    pub high: f64,
-    pub extending: bool,
-    pub area: Option<f64>,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize)]
-pub struct Sell {
-    /// Always `triggered`: the nest stands only once confirmed on the leaf.
-    pub stage: Stage,
-    pub key: String,
-    pub segment: SegmentFact,
-    pub leaf: CompletionFact,
-    pub mid_divergent: bool,
-    pub mid_lower_high: bool,
-    pub parent_complete: bool,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize)]
-pub struct Support {
-    pub low: f64,
-    pub low_at: NaiveDateTime,
-}
-
-/// The completion of `level` in direction up over the span of `s`, a segment
-/// of the next coarser level `coarse`, mapped into child time.
-fn completion_inside(coarse: &LevelRead, level: &LevelRead, s: &Seg) -> Option<Completion> {
-    let t0 = covered_child(coarse.raw(), level.raw(), s.start_at, false)?;
-    let t1 = covered_child(coarse.raw(), level.raw(), s.end_at, true)?;
-    completion(level, t0, Some(t1), Direction::Up)
-}
-
-/// The sell-side nest: the middle level's latest up segment `U` completes on
-/// the leaf, confirmed at `U`'s high. `centres` are the middle level's
-/// qualified centres and `parent_complete` the parent's upswing completion.
-pub fn sell(
-    m: &LevelRead,
-    l: Option<&LevelRead>,
-    centres: &[Centre],
-    parent_complete: bool,
-) -> Option<Sell> {
-    let l = l?;
-    let (ui, u) = m.latest_up()?;
-    let leaf = completion_inside(m, l, &u)?;
-    if leaf.extreme.price != u.end_price || leaf.fact.confirmed_at.is_none() {
-        return None;
-    }
-    let u_area = m.area(&u);
-    let smaller = |other: &Seg| matches!((u_area, m.area(other)), (Some(a), Some(b)) if a < b);
-    let previous = (0..ui.min(m.n()))
-        .rev()
-        .map(|k| m.seg(k))
-        .find(|s| s.direction == Direction::Up);
-    let mid_lower_high = previous.is_some_and(|q| u.end_price < q.end_price);
-    let diverges_previous = previous.is_some_and(|q| u.end_price > q.end_price && smaller(&q));
-    let departs_centre = centres.iter().any(|z| {
-        let entry = m.seg(z.start - 1);
-        let departure = (ui + 1 == z.end && ui >= z.start + 3) || ui == z.end;
-        entry.direction == Direction::Up
-            && departure
-            && u.end_price > z.core_high
-            && smaller(&entry)
-    });
-    Some(Sell {
-        stage: Stage::Triggered,
-        key: format!(
-            "{}|{}",
-            u.start_at.format(KEY_TIME),
-            u.end_at.format(KEY_TIME)
-        ),
-        segment: SegmentFact {
-            start_at: u.start_at,
-            end_at: u.end_at,
-            high: u.end_price,
-            extending: m.moving(ui),
-            area: u_area,
-        },
-        leaf: leaf.fact,
-        mid_divergent: diverges_previous || departs_centre,
-        mid_lower_high,
-        parent_complete,
-    })
-}
-
-/// `parent_complete`: the parent's latest up segment completes on the
-/// middle level.
-pub fn parent_complete(p: &LevelRead, m: &LevelRead) -> bool {
-    p.latest_up()
-        .and_then(|(_, s)| completion_inside(p, m, &s))
-        .is_some()
-}
-
-/// The middle level's qualified centres, for `mid_divergent`.
-pub fn mid_centres(m: &LevelRead) -> Vec<Centre> {
-    m.qualified_centres()
-}
-
-/// The low of the middle level's latest counted down stroke.
-pub fn mid_support(m: &LevelRead) -> Option<Support> {
-    (0..m.finished)
-        .rev()
-        .map(|k| m.seg(k))
-        .find(|s| s.direction == Direction::Down)
-        .map(|s| Support {
-            low: s.end_price,
-            low_at: s.end_at,
-        })
 }
 
 #[cfg(test)]

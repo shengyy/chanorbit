@@ -212,6 +212,7 @@ Every `dt` labels the **end** of its bar's period, and a bar still forming carri
       "centre": {"start_at": "2026-01-06T19:40:00", "zd": 99.99, "zg": 101.51, "dd": 98.49, "gg": 102.01, "member_count": 4},
       "entry": {"start_at": "2026-01-06T19:00:00", "end_at": "2026-01-06T19:40:00", "area": 2.8329},
       "last": {"start_at": "2026-01-06T21:40:00", "end_at": "2026-01-06T22:30:00", "extending": false, "area": 1.1377},
+      "new_extreme": true,
       "area_ratio": 0.4016,
       "confirmed_at": "2026-01-06T22:35:00"
     },
@@ -228,6 +229,21 @@ Every `dt` labels the **end** of its bar's period, and a bar still forming carri
   "observed": null
 }
 ```
+
+Cut at `2026-01-06T22:00:00`, before the new low, the same series answers `"stage": "primed"` with `pullback.low` 98.99 and the move in progress as `mid` (`leaf: null`):
+
+```json
+"mid": {
+  "centre": {"start_at": "2026-01-06T19:40:00", "zd": 99.99, "zg": 101.51, "dd": 98.99, "gg": 102.01, "member_count": 3},
+  "entry": {"start_at": "2026-01-06T19:00:00", "end_at": "2026-01-06T19:40:00", "area": 2.8329},
+  "last": {"start_at": "2026-01-06T21:40:00", "end_at": "2026-01-06T21:55:00", "extending": true, "area": 0.1628},
+  "new_extreme": false,
+  "area_ratio": 0.0575,
+  "confirmed_at": null
+}
+```
+
+`sell` has the same shape on both stages: `turned` when the middle level's top fractal at `U`'s high is confirmed (the only stage without the leaf level), `triggered` when the leaf completion is confirmed there, with `leaf`, `mid_divergent`, `mid_lower_high`, `parent_complete` and `parent_vs_departure` (`{"new_high": true, "area_ratio": 0.2231}` or `null`).
 
 With `observe_from`, `observed` holds rows such as `{"at": "2026-01-06T22:32:00", "side": "buy", "signal": {…the buy object at that step…}}`.
 

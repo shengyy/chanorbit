@@ -308,19 +308,69 @@ fn an_equal_low_is_no_new_extreme() {
     assert_eq!(equal["pullback"]["low_at"], "2026-01-06T19:40:00");
 }
 
-/// Area not smaller: the same last leg to 96, over 30 or 40 1m bars.
+/// Area not smaller: the same last leg to 96, over 30 or 40 1m bars. While
+/// the slow leg still falls it is primed; once the 5m move turns up the
+/// latest element runs up and the nest is armed with its local centre.
 #[test]
 fn a_last_segment_without_divergence_stays_armed() {
     let tail = [(97.0, 20)];
     let fast = buy(&request(&buy_path(95.0, pullback(96.0, 30), &tail), false));
     assert_eq!(fast["stage"], "turned");
     assert!(fast["mid"]["area_ratio"].as_f64().unwrap() > 0.9);
-    let slow = buy(&request(&buy_path(95.0, pullback(96.0, 40), &tail), false));
+    let slow = buy_path(95.0, pullback(96.0, 40), &tail);
+    let falling = buy(&request(&cut(&slow, 2820), false));
+    assert_eq!(falling["stage"], "primed");
+    assert_eq!(falling["mid"]["new_extreme"], true);
+    assert!(falling["mid"]["area_ratio"].as_f64().unwrap() > 1.0);
+    assert_eq!(falling["mid"]["confirmed_at"], Value::Null);
+    let up = buy(&request(&slow, false));
+    assert_eq!(up["stage"], "armed");
+    assert_eq!(up["pullback"]["low"], 95.99);
+    let mid = &up["mid"];
     assert_eq!(
-        (&slow["stage"], &slow["mid"]),
+        mid["centre"]["start_at"],
+        falling["mid"]["centre"]["start_at"]
+    );
+    assert_eq!(
+        (&mid["last"], &mid["new_extreme"], &mid["area_ratio"]),
+        (&Value::Null, &json!(false), &Value::Null)
+    );
+}
+
+/// Primed: the latest 5m element leaves the local centre downward before
+/// the new low (bar 2760). Without the local centre (a three-stroke
+/// pullback, cut on its last down leg) the nest stays armed with no `mid`.
+#[test]
+fn a_departure_from_the_local_centre_primes_the_nest() {
+    let primed = buy(&request(&cut(&base(), 2760), false));
+    assert_eq!(primed["stage"], "primed");
+    assert_eq!(primed["pullback"]["low"], 98.99);
+    let mid = &primed["mid"];
+    assert_eq!(mid["centre"]["start_at"], "2026-01-06T19:40:00");
+    assert_eq!(
+        (&mid["last"]["start_at"], &mid["last"]["extending"]),
+        (&json!("2026-01-06T21:40:00"), &json!(true))
+    );
+    assert_eq!(
+        (&mid["new_extreme"], &mid["confirmed_at"]),
+        (&json!(false), &Value::Null)
+    );
+    let ratio = mid["last"]["area"].as_f64().unwrap() / mid["entry"]["area"].as_f64().unwrap();
+    assert_eq!(mid["area_ratio"].as_f64().unwrap(), ratio);
+    let pull = vec![
+        (99.0, 40),
+        (101.5, 40),
+        (99.2, 12),
+        (99.9, 8),
+        (99.4, 8),
+        (99.8, 8),
+        (98.5, 10),
+    ];
+    let three = buy(&request(&cut(&buy_path(95.0, pull, &[]), 2705), false));
+    assert_eq!(
+        (&three["stage"], &three["mid"]),
         (&json!("armed"), &Value::Null)
     );
-    assert_eq!(slow["pullback"]["low"], 95.99);
 }
 
 /// The sell series: a 30m upswing from 92 whose 5m move (up to 97, 95,
@@ -385,8 +435,53 @@ fn the_sell_nest_mirrors_the_buy_side() {
         json!({"low": 95.49, "low_at": "2026-01-06T01:40:00"})
     );
     assert_eq!(got["buy"], Value::Null);
-    // The sell nest needs the leaf level.
-    assert_eq!(sell(&request(&m, false)), Value::Null);
+    // No 30m centre: nothing to compare the upswing with.
+    assert_eq!(s["parent_vs_departure"], Value::Null);
+    // Without the leaf level the 5m top at the high turns it, same key.
+    let two = sell(&request(&m, false));
+    assert_eq!(
+        (&two["stage"], &two["key"], &two["leaf"]),
+        (&json!("turned"), &s["key"], &Value::Null)
+    );
+    assert_eq!(two["segment"], s["segment"]);
+}
+
+/// Turned: the 5m top at the high confirms on the 5m bar after the one
+/// holding it (bar 1600, not 1595); with the leaf's completion the same key
+/// is triggered.
+#[test]
+fn a_confirmed_mid_top_turns_the_sell_nest() {
+    let m = sell_base((98.0, 14), &[(97.3, 20)]);
+    assert_eq!(sell(&request(&cut(&m, 1595), false)), Value::Null);
+    let turned = sell(&request(&cut(&m, 1600), false));
+    assert_eq!(turned["stage"], "turned");
+    assert_eq!(turned["key"], "2026-01-06T01:40:00|2026-01-06T02:30:00");
+    let triggered = sell(&request(&cut(&m, 1600), true));
+    assert_eq!(triggered["stage"], "triggered");
+    assert_eq!(triggered["key"], turned["key"]);
+    assert!(triggered["leaf"]["confirmed_at"].is_string());
+}
+
+/// The 30m upswing after the retest against the departure that left the
+/// 30m centre (to 104.01): a new high or not. A long flat start readies
+/// the 30m MACD.
+#[test]
+fn the_parent_upswing_against_its_departure() {
+    let versus = |high: f64| {
+        let mut legs = vec![(100.0, 3000)];
+        legs.extend(parent(95.0).into_iter().skip(1));
+        legs.extend(pullback(98.5, 10));
+        legs.extend([(high, 240), (high - 1.0, 60)]);
+        let s = sell(&request(&path(100.0, &legs), false));
+        assert_eq!(s["stage"], "turned");
+        s["parent_vs_departure"].clone()
+    };
+    let over = versus(106.0);
+    assert_eq!(over["new_high"], true);
+    assert!(over["area_ratio"].as_f64().unwrap() > 0.0);
+    let under = versus(103.0);
+    assert_eq!(under["new_high"], false);
+    assert!(under["area_ratio"].as_f64().unwrap() > 0.0);
 }
 
 #[test]
@@ -429,21 +524,19 @@ fn sell_side_conditions_each_matter() {
         (98.0, 10),
         &tail,
     );
-    assert_eq!(sell(&request(&straight, true)), Value::Null);
+    // Without the leaf's completion the 5m top still turns the nest.
+    let leafless = |s: Value| {
+        assert_eq!((&s["stage"], &s["leaf"]), (&json!("turned"), &Value::Null));
+    };
+    leafless(sell(&request(&straight, true)));
     assert_eq!(
         sell(&request(&sell_base((97.31, 10), &[(96.9, 20)]), true))["stage"],
         "triggered"
     );
-    assert_eq!(
-        sell(&request(&sell_base((97.3, 10), &[(96.9, 20)]), true)),
-        Value::Null
-    );
+    leafless(sell(&request(&sell_base((97.3, 10), &[(96.9, 20)]), true)));
     let smaller = sell(&request(&sell_base((98.8, 30), &[(98.1, 20)]), true));
     assert!(smaller["leaf"]["area_ratio"].as_f64().unwrap() > 0.9);
-    assert_eq!(
-        sell(&request(&sell_base((98.9, 30), &[(98.2, 20)]), true)),
-        Value::Null
-    );
+    leafless(sell(&request(&sell_base((98.9, 30), &[(98.2, 20)]), true)));
     // The high on the last 1m bar of its 5m bar (bar 1590).
     let m = sell_base((98.0, 14), &tail);
     assert_eq!(sell(&request(&cut(&m, 1590), true)), Value::Null);
@@ -513,8 +606,10 @@ fn stateless_truncation_equals_the_replay() {
         &request(&buy_path(95.0, pullback(98.5, 14), &[(99.5, 20)]), true),
         2700,
     );
-    // Sell, 3 levels.
-    replay_equals_truncation(&request(&sell_base((98.0, 14), &[(97.3, 20)]), true), 1550);
+    // Sell, 3 levels (triggered) and 2 levels (turned).
+    let m = sell_base((98.0, 14), &[(97.3, 20)]);
+    replay_equals_truncation(&request(&m, true), 1550);
+    replay_equals_truncation(&request(&m, false), 300);
 }
 
 #[test]
@@ -526,6 +621,7 @@ fn observation_lists_each_stage_once_in_time_order() {
         .as_array()
         .unwrap()
         .iter()
+        .filter(|o| o["side"] == "buy")
         .map(|o| {
             format!(
                 "{} {} {}",
@@ -533,15 +629,30 @@ fn observation_lists_each_stage_once_in_time_order() {
             )
         })
         .collect();
-    // The last 5m segment is ripe at its first new low, again (a new key) at
-    // the lower low, and triggered once the 1m bottom there confirms.
+    // The last 5m segment is primed once it leaves the local centre, ripe
+    // at its first new low; each lower 1m low inside the next 5m bar is a
+    // new key that is only primed until that 5m bar closes at it (ripe),
+    // then triggered once the 1m bottom there confirms.
     assert_eq!(
         rows,
         [
+            r#""2026-01-06T22:00:00" "primed" "2026-01-06T19:40:00""#,
             r#""2026-01-06T22:25:00" "ripe" "2026-01-06T22:25:00""#,
+            r#""2026-01-06T22:26:00" "primed" "2026-01-06T22:26:00""#,
+            r#""2026-01-06T22:27:00" "primed" "2026-01-06T22:27:00""#,
+            r#""2026-01-06T22:28:00" "primed" "2026-01-06T22:28:00""#,
+            r#""2026-01-06T22:29:00" "primed" "2026-01-06T22:29:00""#,
             r#""2026-01-06T22:30:00" "ripe" "2026-01-06T22:30:00""#,
             r#""2026-01-06T22:32:00" "triggered" "2026-01-06T22:30:00""#,
         ]
+    );
+    // The sell side records its turned rows alongside.
+    assert!(
+        got["observed"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|o| o["side"] == "sell" && o["signal"]["stage"] == "turned")
     );
     // An observation start after the last bar observes nothing.
     req["observe_from"] = json!("2099-01-01T00:00:00");

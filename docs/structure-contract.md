@@ -303,6 +303,8 @@ One instrument at one moment through 2 or 3 levels, coarsest first, labelled as 
 
 Items 1–3 make the move **complete**; with item 4 it is **confirmed**. While `x` moves, its area is taken to its current extreme and can change.
 
+**Move in progress.** Over an open span, while items 0–1 hold but the move is not complete, the move is read from the level's **latest element** (the unfinished segment when there is one, otherwise the last stroke as read). It is the **candidate** `x` when it runs in `dir` and sits in `C`'s departure position of item 2; otherwise there is no candidate. With a candidate, `new_extreme` is whether it holds the span's extreme beyond every other member (item 2's test), `area_ratio` is its area over `e`'s (both available, `e`'s positive) and `confirmed_at` is item 4 when `new_extreme` holds.
+
 ### Third-buy nest (`buy`)
 
 - **A**, on `P`:
@@ -311,33 +313,38 @@ Items 1–3 make the move **complete**; with item 4 it is **confirmed**. While `
   - A3. No `P` stroke after `D` runs up with an end whose child time on the finest level (its parent bar's time when no finer bar lies in it) is before `L_P`'s bar: no completed parent up stroke between `D`'s high and `L_P`.
   - A4. Every finest bar after `L_P`'s bar has a high strictly below `H_dep`.
 - **B**, on `M`: `completion(M, [child time of D's high on M, last input], down)` is complete and its extreme equals `L_P`. Its `x` is the middle level's last segment.
+- **Primed**, on `M`: B does not hold, items 0–1 of that completion hold, and the [move in progress](#completion) has a candidate: `M`'s latest element runs down from the local centre's departure position (it has not yet made the span's new low, or its area is not yet smaller than the entry's, or another item of B fails).
 - **C**, on `L`: `completion(L, [child time of x's start on L, last input], down)` is confirmed and its extreme equals `L_P`.
 
-`stage`: A alone `armed`; A and B `ripe`; A, B and B's item 4 `turned` (on `M`, without the leaf); A, B and C `triggered` (needs `L`). Without A, `buy` is `null`. `key` = `"{Z.start_at}|{D.end_at}|{L_P bar time}"`: a new low of the retest makes a new key. `leaf` is the leaf completion when complete (items 1–3, confirmed or not) with `L_P` as its extreme, otherwise `null`; it is computed only when B holds.
+`stage`, in order `armed` < `primed` < `ripe` < `turned` < `triggered`: A alone `armed`; A and primed `primed`; A and B `ripe`; A, B and B's item 4 `turned` (on `M`, without the leaf); A, B and C `triggered` (needs `L`). Without A, `buy` is `null`. `key` = `"{Z.start_at}|{D.end_at}|{L_P bar time}"`: a new low of the retest makes a new key, so a lower finest low inside a middle bar that has not closed is a new key that stays `primed` until that bar closes at it. `mid` is output whenever items 0–1 of B's completion hold: the completion when B holds (`new_extreme` true), otherwise the move in progress (`last` is the candidate or `null`). `leaf` is the leaf completion when complete (items 1–3, confirmed or not) with `L_P` as its extreme, otherwise `null`; it is computed only when B holds.
 
 ### Up-end nest (`sell`)
 
 - `U` is `M`'s latest up element whose high no later raw bar exceeds (in practice the latest up element: a later higher bar would extend it).
-- The nest stands when `completion(L, [child time of U's start, child time of U's high], up)` is confirmed and its extreme equals `U`'s high (the leaf top fractal at `U`'s high). Without `L`, `sell` is `null`. Its `stage` is always `triggered`: there is no partial sell stage.
+- `stage` `triggered`: `completion(L, [child time of U's start, child time of U's high], up)` is confirmed and its extreme equals `U`'s high (the leaf top fractal at `U`'s high).
+- Otherwise `stage` `turned`: a top fractal of `M` at `U`'s high is confirmed (item 4 of [completion](#completion) applied on `M` at `U`'s high, among the fractals of `U` and later strokes and the unfinished window). This includes a leaf completion that holds but is not confirmed, and a request without `L`, where only `turned` can stand.
+- Neither: `sell` is `null`. `leaf` is the leaf completion when it holds with `U`'s high as its extreme (confirmed or not), otherwise `null`.
 - `mid_divergent`: `U` makes a higher high than the previous up stroke of `M` on a smaller area (both available), or `U` is the upward departure of a qualified centre of `M`'s own canonical sequence (its last member after the third, or the element right after its last member, with a high above `zg`) whose entry runs up, on a smaller area than that entry.
 - `mid_lower_high`: `U`'s high is below the previous up stroke's high.
 - `parent_complete`: `completion(M, [child time of the start, child time of the high] of P's latest up element, up)` is complete (items 1–3).
-- `key` = `"{U.start_at}|{U.end_at}"` (`end_at` is the time of `U`'s high).
+- `parent_vs_departure`: `P`'s latest up element `U_P` (as `U` on `M`) against `D_P`, the departure of the latest qualified centre of `P` whose [state](#centre-state) (with the next qualified centre as its next listed centre) is `departed` through `zg` by an element running up. `new_high`: `U_P`'s high is strictly above `D_P`'s high; `area_ratio`: `U_P`'s area over `D_P`'s (both available, `D_P`'s positive), otherwise `null`. `null` when there is no such `D_P` or `U_P` starts before `D_P` ends (`U_P` is `D_P` itself).
+- `key` = `"{U.start_at}|{U.end_at}"` (`end_at` is the time of `U`'s high), shared by both stages. The four attributes are output on both.
 
 `mid_support` stands apart from both nests: the end of `M`'s latest counted down stroke (its low and time), or `null`.
 
 ### Signals observation
 
-With `observe_from`, the request is replayed along the finest level, after resolving revisions (the last version of each `dt` in every level). At each finest bar with `dt ≥ observe_from` every level holds exactly its bars labelled no later than that bar, and the nests are evaluated as a stateless call on those bars would: the result at a step equals the request truncated to that time. `observed` lists, in step order (buy before sell within a step), the first step at which each `(side, key, stage)` stood with `stage` in `ripe`, `turned`, `triggered`, and the whole object at that step. Only the stage the object holds is recorded: a step that goes from `armed` to `triggered` records `triggered` alone. The final `buy`, `sell` and `mid_support` are those of the whole request.
+With `observe_from`, the request is replayed along the finest level, after resolving revisions (the last version of each `dt` in every level). At each finest bar with `dt ≥ observe_from` every level holds exactly its bars labelled no later than that bar, and the nests are evaluated as a stateless call on those bars would: the result at a step equals the request truncated to that time. `observed` lists, in step order (buy before sell within a step), the first step at which each `(side, key, stage)` stood with `stage` in `primed`, `ripe`, `turned`, `triggered` (buy) or `turned`, `triggered` (sell), and the whole object at that step. Only the stage the object holds is recorded: a step that goes from `armed` to `triggered` records `triggered` alone, and a sell key that is `turned` and later `triggered` has a row for each. The final `buy`, `sell` and `mid_support` are those of the whole request.
 
-MACD is causal, so the series' values are computed once and read up to each step. The parent's A1 and the middle level's centres for `mid_divergent` and `parent_complete` are recomputed only when their level has gained a bar; `buy` returns at A when A fails.
+MACD is causal, so the series' values are computed once and read up to each step. The parent's A1 and `parent_vs_departure`, the middle level's centres for `mid_divergent` and `parent_complete` are recomputed only when their levels have gained a bar; `buy` returns at A when A fails.
 
 ## Signals output
 
 | Field | Meaning |
 |---|---|
-| `buy` | `null` or `stage` (`armed`, `ripe`, `turned`, `triggered`), `key`, `centre` (`Z`), `departure` {`start_at`, `end_at`, `high` (`H_dep`), `new_extreme`, `area` (`P` area or `null`)}, `pullback` {`low` (`L_P`), `low_at`}, `mid` (B) and `leaf` (C), each a completion or `null` |
-| `sell` | `null` or `stage` (`triggered`), `key`, `segment` {`start_at`, `end_at`, `high`, `extending` (moving), `area` or `null`} (`U`), `leaf` (the completion), `mid_divergent`, `mid_lower_high`, `parent_complete` |
+| `buy` | `null` or `stage` (`armed`, `primed`, `ripe`, `turned`, `triggered`), `key`, `centre` (`Z`), `departure` {`start_at`, `end_at`, `high` (`H_dep`), `new_extreme`, `area` (`P` area or `null`)}, `pullback` {`low` (`L_P`), `low_at`}, `mid` (a move or `null`), `leaf` (C, a completion or `null`) |
+| `sell` | `null` or `stage` (`turned`, `triggered`), `key`, `segment` {`start_at`, `end_at`, `high`, `extending` (moving), `area` or `null`} (`U`), `leaf` (a completion or `null`), `mid_divergent`, `mid_lower_high`, `parent_complete`, `parent_vs_departure` {`new_high`, `area_ratio` or `null`} or `null` |
 | `mid_support` | `null` or {`low`, `low_at`} |
-| completion | `centre` {`start_at`, `zd`, `zg`, `dd`, `gg`, `member_count`} of the local centre, `entry` {`start_at`, `end_at`, `area`}, `last` {`start_at`, `end_at`, `extending`, `area`} (`x`), `area_ratio` (`last.area / entry.area`), `confirmed_at` or `null` |
+| completion | `centre` {`start_at`, `zd`, `zg`, `dd`, `gg`, `member_count`} of the local centre (`member_count` as is: nine or more members mean the finer move has grown into a centre of its own), `entry` {`start_at`, `end_at`, `area`}, `last` {`start_at`, `end_at`, `extending`, `area`} (`x`), `area_ratio` (`last.area / entry.area`), `confirmed_at` or `null` |
+| move | `centre` and `entry` as a completion's (`entry.area` may be `null`), `last` (as a completion's, `area` may be `null`; `null` without a candidate), `new_extreme`, `area_ratio` or `null`, `confirmed_at` or `null` |
 | `observed` | `null` without `observe_from`; otherwise rows {`at`, `side` (`buy`/`sell`), `signal` (the object)} |

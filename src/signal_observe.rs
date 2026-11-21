@@ -6,9 +6,10 @@ use crate::analyzer::{Analyzer, Config};
 use crate::bar::RawBar;
 use crate::centre::Centre;
 use crate::macd::{MacdSeries, PARAMS, macd_series};
-use crate::signal::{
-    Buy, LevelRead, ParentDeparture, Sell, Stage, Support, buy, mid_centres, mid_support,
-    parent_complete, parent_departure, sell,
+use crate::signal::{Buy, LevelRead, ParentDeparture, Stage, buy, parent_departure};
+use crate::signal_sell::{
+    ParentFacts, Sell, Support, VersusDeparture, mid_centres, mid_support, parent_complete, sell,
+    versus_departure,
 };
 use chrono::NaiveDateTime;
 use serde::Serialize;
@@ -52,7 +53,7 @@ pub struct Observed {
 /// state.
 #[derive(Default)]
 struct Memo {
-    parent: Option<(usize, Option<ParentDeparture>)>,
+    parent: Option<(usize, Option<ParentDeparture>, Option<VersusDeparture>)>,
     centres: Option<(usize, Vec<Centre>)>,
     parent_complete: Option<((usize, usize), bool)>,
 }
@@ -66,23 +67,26 @@ fn evaluate(levels: &[Analyzer], macd: &[MacdSeries], memo: &mut Memo) -> Signal
     let (p, m, l) = (&read[0], &read[1], read.get(2));
     let lens = (p.raw().len(), m.raw().len());
     if memo.parent.as_ref().is_none_or(|x| x.0 != lens.0) {
-        memo.parent = Some((lens.0, parent_departure(p)));
+        memo.parent = Some((lens.0, parent_departure(p), versus_departure(p)));
     }
-    let dep = memo.parent.as_ref().and_then(|x| x.1.as_ref());
-    let sell = l.and_then(|l| {
-        if memo.centres.as_ref().is_none_or(|x| x.0 != lens.1) {
-            memo.centres = Some((lens.1, mid_centres(m)));
-        }
-        if memo.parent_complete.is_none_or(|x| x.0 != lens) {
-            memo.parent_complete = Some((lens, parent_complete(p, m)));
-        }
-        let centres = &memo.centres.as_ref().expect("set above").1;
-        let complete = memo.parent_complete.expect("set above").1;
-        sell(m, Some(l), centres, complete)
-    });
+    let (dep, versus) = match &memo.parent {
+        Some((_, dep, versus)) => (dep.as_ref(), *versus),
+        None => unreachable!("set above"),
+    };
+    if memo.centres.as_ref().is_none_or(|x| x.0 != lens.1) {
+        memo.centres = Some((lens.1, mid_centres(m)));
+    }
+    if memo.parent_complete.is_none_or(|x| x.0 != lens) {
+        memo.parent_complete = Some((lens, parent_complete(p, m)));
+    }
+    let centres = &memo.centres.as_ref().expect("set above").1;
+    let parent = ParentFacts {
+        complete: memo.parent_complete.expect("set above").1,
+        versus_departure: versus,
+    };
     Signals {
         buy: buy(p, m, l, dep),
-        sell,
+        sell: sell(m, l, centres, parent),
         mid_support: mid_support(m),
     }
 }
