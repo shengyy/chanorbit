@@ -175,24 +175,43 @@ fn a_rally_after_the_low_does_not_move_the_leaf_veto() {
     }
 }
 
+/// A nest capped at `armed` by A4 or A5: the key and A facts stand, the
+/// finer levels are not read.
+fn assert_capped(b: &Value) {
+    assert_eq!(b["stage"], "armed", "{b}");
+    for field in ["mid", "leaf", "leaf_centre"] {
+        assert_eq!(b[field], Value::Null, "{field}");
+    }
+    assert!(b["key"].is_string() && b["pullback"]["low"].is_number());
+}
+
 /// A5 over 30m legs of 240 bars from the flat start: an earlier 30m centre
 /// built from `head`, then `Z` (members from 90: 96.5, 92, 95, 93) left
-/// upward to 104, and the base pullback to 98.49.
-fn earlier_centre(head: &[f64]) -> Value {
+/// upward to 104, and a pullback to `low` (the base one: 98.49).
+fn earlier_centre_to(head: &[f64], low: f64, bars: usize) -> Value {
     let mut legs = vec![(100.0, 900)];
     legs.extend(head.iter().map(|&p| (p, 240)));
     legs.extend([90.0, 96.5, 92.0, 95.0, 93.0, 104.0].map(|p| (p, 240)));
-    legs.extend(pullback(98.5, 10));
-    legs.push((99.5, 20));
+    legs.extend(pullback(low, bars));
+    legs.push((low + 1.0, 20));
     buy(&request(&path(100.0, &legs), false))
 }
 
+fn earlier_centre(head: &[f64]) -> Value {
+    earlier_centre_to(head, 98.5, 10)
+}
+
 #[test]
-fn a_low_back_in_an_earlier_parent_core_stands_no_nest() {
+fn a_low_back_in_an_earlier_parent_core_caps_the_nest() {
     // The previous centre's core [97.49, 99.51] holds the low.
+    let inside = [103.0, 97.0, 100.0, 97.5, 99.5];
+    assert_capped(&earlier_centre(&inside));
+    // A lower low below that core's `zd` (96.99, still above `zg` 95.01):
+    // A5 passes and the new key reaches `turned`.
+    let lower = earlier_centre_to(&inside, 97.0, 25);
     assert_eq!(
-        earlier_centre(&[103.0, 97.0, 100.0, 97.5, 99.5]),
-        Value::Null
+        (&lower["stage"], &lower["pullback"]["low"]),
+        (&json!("turned"), &json!(96.99))
     );
     // Its core [98.59, 99.51] lies above the low.
     let above = earlier_centre(&[103.0, 98.6, 100.0, 98.6, 99.5]);
@@ -201,10 +220,7 @@ fn a_low_back_in_an_earlier_parent_core_stands_no_nest() {
         (&json!("turned"), &json!(98.49))
     );
     // `zg` at the low (98.49) versus one tick below it (98.48).
-    assert_eq!(
-        earlier_centre(&[103.0, 97.0, 100.0, 97.5, 98.48]),
-        Value::Null
-    );
+    assert_capped(&earlier_centre(&[103.0, 97.0, 100.0, 97.5, 98.48]));
     assert_eq!(
         earlier_centre(&[103.0, 97.0, 100.0, 97.5, 98.47])["stage"],
         "turned"
@@ -220,7 +236,7 @@ fn a_low_back_in_an_earlier_parent_core_stands_no_nest() {
         legs.push((99.5, 20));
         buy(&request(&path(100.0, &legs), false))
     };
-    assert_eq!(two(97.0), Value::Null);
+    assert_capped(&two(97.0));
     let below = two(98.6);
     assert_eq!(below["stage"], "turned");
     assert_eq!(below["centre"]["zd"], 92.99);
@@ -263,13 +279,33 @@ fn a_second_retest_stands_no_nest() {
     assert_eq!(armed["pullback"]["low"], 98.99);
 }
 
-/// Already beyond `H_dep`: a later high equal to the departure's high.
+/// Already beyond `H_dep`: a later high equal to the departure's high caps
+/// the nest at `armed`, with 2 and 3 levels.
 #[test]
-fn a_move_back_to_the_departure_high_ends_the_nest() {
+fn a_move_back_to_the_departure_high_caps_the_nest() {
     let below = buy_path(95.0, pullback(98.5, 10), &[(99.5, 20), (103.99, 44)]);
     assert_eq!(stage(&request(&below, false)), "turned");
     let at = buy_path(95.0, pullback(98.5, 10), &[(99.5, 20), (104.0, 44)]);
-    assert_eq!(buy(&request(&at, false)), Value::Null);
+    for leaf in [false, true] {
+        assert_capped(&buy(&request(&at, leaf)));
+    }
+}
+
+/// A4 heals with a new low: after the high back at `H_dep` the pullback
+/// falls to 96.99, a new key that reaches `turned`.
+#[test]
+fn a_new_low_after_the_departure_high_heals_the_nest() {
+    let tail = [(99.5, 20), (104.0, 44), (97.0, 60), (97.8, 20)];
+    let m = buy_path(95.0, pullback(98.5, 10), &tail);
+    let capped = buy(&request(&cut(&m, 2850), false));
+    assert_capped(&capped);
+    let healed = buy(&request(&m, false));
+    assert_eq!(
+        (&healed["stage"], &healed["pullback"]["low"]),
+        (&json!("turned"), &json!(96.99))
+    );
+    assert_ne!(healed["key"], capped["key"]);
+    assert_eq!(healed["centre"], capped["centre"]);
 }
 
 /// No centre inside the span: a three-stroke pullback.
@@ -433,6 +469,18 @@ fn stateless_truncation_equals_the_replay() {
     replay_equals_truncation(
         &request(&buy_path(95.0, pullback(98.5, 14), &[(99.5, 20)]), true),
         2700,
+    );
+    // Buy capped by A4, then healed by a new low.
+    replay_equals_truncation(
+        &request(
+            &buy_path(
+                95.0,
+                pullback(98.5, 10),
+                &[(99.5, 20), (104.0, 44), (97.0, 60), (97.8, 20)],
+            ),
+            false,
+        ),
+        500,
     );
     // Sell, 3 levels (triggered) and 2 levels (turned).
     let m = sell_base((98.0, 14), &[(97.3, 20)]);

@@ -661,47 +661,54 @@ pub fn buy(
         .earlier
         .iter()
         .any(|&(zd, zg)| zd <= low.price && low.price <= zg);
-    if second || passed || returned {
+    if second {
         return None;
     }
-    // B: the pullback completes on the middle level at the low.
-    let t0 = covered_child(p.raw(), m.raw(), d.end_at, true);
-    let mid = t0
-        .and_then(|t0| completion(m, t0, None, Direction::Down))
-        .filter(|c| c.extreme.price == low.price);
-    // C, a veto on the leaf over the down move from the start of the middle
-    // level's last segment to the low (the finest level is the leaf, so the
-    // low's time is a leaf time): it completes there at the low, or no leaf
-    // centre lies inside it.
-    let leaf_span = match (&mid, l) {
-        (Some(mid), Some(l)) => {
-            covered_child(m.raw(), l.raw(), mid.last.start_at, true).map(|t0| (l, t0))
-        }
-        _ => None,
-    };
-    let leaf = leaf_span
-        .and_then(|(l, t0)| completion_to(l, t0, low.at, Direction::Down))
-        .filter(|c| c.extreme.price == low.price);
-    let turned = mid.as_ref().is_some_and(|c| c.fact.confirmed_at.is_some());
-    // C waits until the leaf element holding the low is a counted stroke.
-    let leaf_centre = leaf_span
-        .filter(|(l, _)| turned && l.counted_at(low.at))
-        .map(|(l, t0)| l.centre_within(t0, low.at));
-    let stage = match (&mid, leaf_centre) {
-        (Some(_), Some(centre)) if leaf.is_some() || !centre => Stage::Triggered,
-        (Some(_), _) if turned => Stage::Turned,
-        (Some(_), _) => Stage::Ripe,
-        (None, _) => Stage::Armed,
-    };
-    // Without B the move in progress, primed once its latest element leaves
-    // the local centre downward.
-    let mid = match mid {
-        Some(c) => Some(MoveFact::from(c.fact)),
-        None => t0.and_then(|t0| progress(m, t0, Direction::Down)),
-    };
-    let stage = match &mid {
-        Some(x) if stage == Stage::Armed && x.last.is_some() => Stage::Primed,
-        _ => stage,
+    // A4 or A5 failing caps the nest at `armed`: both are read on a
+    // provisional low and heal with a new low, which is a new key.
+    let (stage, mid, leaf, leaf_centre) = if passed || returned {
+        (Stage::Armed, None, None, None)
+    } else {
+        // B: the pullback completes on the middle level at the low.
+        let t0 = covered_child(p.raw(), m.raw(), d.end_at, true);
+        let mid = t0
+            .and_then(|t0| completion(m, t0, None, Direction::Down))
+            .filter(|c| c.extreme.price == low.price);
+        // C, a veto on the leaf over the down move from the start of the middle
+        // level's last segment to the low (the finest level is the leaf, so the
+        // low's time is a leaf time): it completes there at the low, or no leaf
+        // centre lies inside it.
+        let leaf_span = match (&mid, l) {
+            (Some(mid), Some(l)) => {
+                covered_child(m.raw(), l.raw(), mid.last.start_at, true).map(|t0| (l, t0))
+            }
+            _ => None,
+        };
+        let leaf = leaf_span
+            .and_then(|(l, t0)| completion_to(l, t0, low.at, Direction::Down))
+            .filter(|c| c.extreme.price == low.price);
+        let turned = mid.as_ref().is_some_and(|c| c.fact.confirmed_at.is_some());
+        // C waits until the leaf element holding the low is a counted stroke.
+        let leaf_centre = leaf_span
+            .filter(|(l, _)| turned && l.counted_at(low.at))
+            .map(|(l, t0)| l.centre_within(t0, low.at));
+        let stage = match (&mid, leaf_centre) {
+            (Some(_), Some(centre)) if leaf.is_some() || !centre => Stage::Triggered,
+            (Some(_), _) if turned => Stage::Turned,
+            (Some(_), _) => Stage::Ripe,
+            (None, _) => Stage::Armed,
+        };
+        // Without B the move in progress, primed once its latest element leaves
+        // the local centre downward.
+        let mid = match mid {
+            Some(c) => Some(MoveFact::from(c.fact)),
+            None => t0.and_then(|t0| progress(m, t0, Direction::Down)),
+        };
+        let stage = match &mid {
+            Some(x) if stage == Stage::Armed && x.last.is_some() => Stage::Primed,
+            _ => stage,
+        };
+        (stage, mid, leaf.map(|c| c.fact), leaf_centre)
     };
     let z = &dep.centre;
     Some(Buy {
@@ -724,7 +731,7 @@ pub fn buy(
             low: low.price,
             low_at: low.at,
         },
-        leaf: leaf.map(|c| c.fact),
+        leaf,
         mid,
         leaf_centre,
     })
