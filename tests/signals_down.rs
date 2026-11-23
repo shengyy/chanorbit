@@ -264,6 +264,10 @@ fn the_stage_of_a_key_never_steps_back() {
         (&json!("turned"), &json!(86.99))
     );
     assert_eq!(never_steps_back(&request(&m, false), D_AT / 5), 3);
+    assert_eq!(
+        never_steps_back(&request(&no_mid_divergence(), false), D_AT / 5),
+        2
+    );
     assert_eq!(never_steps_back(&request(&slow(), true), D_AT + 200), 3);
 }
 
@@ -394,4 +398,31 @@ fn down_end_replay_equals_truncation() {
             r#""2026-01-09T03:10:00" "down_end" "turned" "2026-01-09T03:00:00""#,
         ]
     );
+}
+
+/// A 5m last segment to 80 without divergence (the entry stroke from 125
+/// keeps A2), then a rebound to 82.
+fn no_mid_divergence() -> Vec<RawBar> {
+    let mut d = FAST[..4].to_vec();
+    d.push((80.0, 60));
+    down_path(&[(125.0, 240)], &d, &[(82.0, 40)])
+}
+
+/// B fails at the low (5m area ratio above 1): `primed`, also once the next
+/// 5m bars rebound into an up unfinished segment from the low, which lies
+/// after the span and is not its last element.
+#[test]
+fn a_rebound_after_the_low_keeps_the_move_in_progress() {
+    let m = no_mid_divergence();
+    let at = down(&request(&cut(&m, 5920), false));
+    assert_eq!(
+        (&at["stage"], &at["low"]["price"]),
+        (&json!("primed"), &json!(79.99))
+    );
+    assert!(at["mid"]["area_ratio"].as_f64().unwrap() > 1.0);
+    for n in (5925..=m.len()).step_by(5) {
+        let d = down(&request(&cut(&m, n), false));
+        assert_eq!((&d["stage"], &d["key"]), (&at["stage"], &at["key"]), "{n}");
+        assert_eq!(d["mid"]["last"]["start_at"], at["mid"]["last"]["start_at"]);
+    }
 }

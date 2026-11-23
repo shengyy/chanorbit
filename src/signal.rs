@@ -519,8 +519,9 @@ fn progress_in(
     let n = r.n();
     let latest = match r.unfinished {
         _ if loc.k1 < n => (loc.k1 - 1, r.seg(loc.k1 - 1)),
-        Some(u) => (n, u),
-        None => (n - 1, r.seg(n - 1)),
+        // An unfinished segment starting at `until` lies after the span.
+        Some(u) if until.is_none_or(|t| u.start_at < t) => (n, u),
+        _ => (n - 1, r.seg(n - 1)),
     };
     let entry_area = r.area(&loc.entry);
     let candidate = Some(latest).filter(|(k, x)| x.direction == dir && loc.departs(*k));
