@@ -4,7 +4,7 @@
 //! `docs/structure-contract.md#signals`.
 use crate::centre::Centre;
 use crate::fractal::Mark;
-use crate::levels::{Pos, Seg, State};
+use crate::levels::{Seg, State};
 use crate::levels_state::centre_state;
 use crate::signal::{
     Completion, CompletionFact, LevelRead, Stage, completion, covered_child, side_price,
@@ -147,17 +147,9 @@ pub fn parent_complete(p: &LevelRead, m: &LevelRead) -> bool {
 pub fn versus_departure(p: &LevelRead) -> Option<VersusDeparture> {
     let (_, u) = p.latest_up()?;
     let u = &u;
-    let s = p.c.strokes();
     let qualified = p.qualified_centres();
     let w0 = qualified.first()?.start - 1;
-    let segs: Vec<Seg> = (w0..s.len())
-        .map(|k| Seg {
-            pos: Pos::Stroke(k - w0),
-            ..p.seg(k)
-        })
-        .chain(p.unfinished)
-        .chain(p.after)
-        .collect();
+    let segs = p.sequence(w0);
     let d = (0..qualified.len()).rev().find_map(|k| {
         match centre_state(p.raw(), &segs, w0, &qualified[k], qualified.get(k + 1), k) {
             State::Departed {

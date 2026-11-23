@@ -31,7 +31,7 @@ target/release/chanorbit geometry --batch < requests.jsonl > responses.jsonl
 
 `chanorbit levels` takes one instrument's series for several periods, coarsest first, and answers per level with the stroke window, recent centres and their state against the latest price, same-direction comparisons, and how the next finer level sits inside it.
 
-`chanorbit signals` takes 2 or 3 such series and answers with the third-buy nest (a parent third-buy retest completing on the finer levels, with its stage), the up-end nest and the middle level's support; with `observe_from` it replays the series and lists when each nest stage first stood.
+`chanorbit signals` takes 2 or 3 such series and answers with the third-buy nest (a parent third-buy retest completing on the finer levels, with its stage), the down-end nest (a parent down move leaving its centre in divergence, completing on the finer levels), the up-end nest and the middle level's support; with `observe_from` it replays the series and lists when each nest stage first stood.
 
 Requests, responses, errors and exit codes: [docs/cli-contract.md](docs/cli-contract.md). Definitions of every object: [docs/structure-contract.md](docs/structure-contract.md).
 

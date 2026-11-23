@@ -71,6 +71,7 @@ fn every_stage_on_the_base_series() {
     assert_eq!(b["leaf"]["centre"]["start_at"], "2026-01-06T21:52:00");
     assert_eq!(b["leaf_centre"], true);
     assert_eq!(b["mid"], full["buy"]["mid"]);
+    assert_eq!(three["down_end"], Value::Null);
     assert_eq!(
         three["mid_support"],
         json!({"low": 98.49, "low_at": "2026-01-06T22:30:00"})
@@ -434,57 +435,6 @@ fn the_departure_is_compared_with_an_up_entry() {
     );
 }
 
-/// Each level truncated to the bars labelled no later than `t`.
-fn truncated(request: &Value, t: &str) -> Value {
-    let mut out = request.clone();
-    for level in out["levels"].as_array_mut().unwrap() {
-        let keep = level["dt"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .take_while(|d| d.as_str().unwrap() <= t)
-            .count();
-        for field in ["dt", "high", "low", "close", "vol"] {
-            level[field].as_array_mut().unwrap().truncate(keep);
-        }
-    }
-    out
-}
-
-/// The replay at each step equals the stateless call on the series truncated
-/// there: the first appearances of every `(side, key, stage)` are the same,
-/// with the same objects, and the final answer is the stateless one.
-fn replay_equals_truncation(request: &Value, from: usize) {
-    let finest = request["levels"].as_array().unwrap().last().unwrap()["dt"]
-        .as_array()
-        .unwrap()
-        .clone();
-    let mut expected = Vec::new();
-    let mut seen = std::collections::HashSet::new();
-    for t in &finest[from..] {
-        let t = t.as_str().unwrap();
-        let now = run(Command::Signals, &truncated(request, t));
-        for side in ["buy", "sell"] {
-            let s = &now[side];
-            if s.is_null() || s["stage"] == "armed" {
-                continue;
-            }
-            if seen.insert((side, s["key"].clone(), s["stage"].clone())) {
-                expected.push(json!({"at": t, "side": side, "signal": s}));
-            }
-        }
-    }
-    assert!(!expected.is_empty());
-    let mut observed = request.clone();
-    observed["observe_from"] = finest[from].clone();
-    let got = run(Command::Signals, &observed);
-    assert_eq!(got["observed"], Value::Array(expected));
-    let stateless = run(Command::Signals, request);
-    for field in ["buy", "sell", "mid_support"] {
-        assert_eq!(got[field], stateless[field], "{field}");
-    }
-}
-
 #[test]
 fn stateless_truncation_equals_the_replay() {
     // Buy: 2 levels (ripe, turned) and 3 levels (ripe, triggered).
@@ -572,7 +522,7 @@ fn signals_requests_are_checked() {
         let (text, ok) = handle_command(Command::Signals, &req.to_string());
         let v: Value = serde_json::from_str(&text).unwrap();
         assert!(!ok, "{text}");
-        assert_eq!(v["schema"], "chanorbit.signals/1");
+        assert_eq!(v["schema"], "chanorbit.signals/2");
         assert_eq!(v["error"]["kind"], kind, "{text}");
     };
     let mut one = request(&m, false);

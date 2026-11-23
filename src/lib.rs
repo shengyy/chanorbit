@@ -20,6 +20,7 @@ pub mod macd;
 pub mod observe;
 pub mod power;
 pub mod signal;
+pub mod signal_down;
 pub mod signal_observe;
 pub mod signal_sell;
 pub mod stage;

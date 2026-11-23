@@ -204,3 +204,54 @@ pub fn sell_base(high: (f64, usize), tail: &[(f64, usize)]) -> Vec<RawBar> {
 pub fn sell(request: &Value) -> Value {
     run(Command::Signals, request)["sell"].clone()
 }
+
+/// Each level truncated to the bars labelled no later than `t`.
+pub fn truncated(request: &Value, t: &str) -> Value {
+    let mut out = request.clone();
+    for level in out["levels"].as_array_mut().unwrap() {
+        let keep = level["dt"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .take_while(|d| d.as_str().unwrap() <= t)
+            .count();
+        for field in ["dt", "high", "low", "close", "vol"] {
+            level[field].as_array_mut().unwrap().truncate(keep);
+        }
+    }
+    out
+}
+
+/// The replay at each step equals the stateless call on the series truncated
+/// there: the first appearances of every `(side, key, stage)` are the same,
+/// with the same objects, and the final answer is the stateless one.
+pub fn replay_equals_truncation(request: &Value, from: usize) {
+    let finest = request["levels"].as_array().unwrap().last().unwrap()["dt"]
+        .as_array()
+        .unwrap()
+        .clone();
+    let mut expected = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    for t in &finest[from..] {
+        let t = t.as_str().unwrap();
+        let now = run(Command::Signals, &truncated(request, t));
+        for side in ["buy", "down_end", "sell"] {
+            let s = &now[side];
+            if s.is_null() || s["stage"] == "armed" {
+                continue;
+            }
+            if seen.insert((side, s["key"].clone(), s["stage"].clone())) {
+                expected.push(json!({"at": t, "side": side, "signal": s}));
+            }
+        }
+    }
+    assert!(!expected.is_empty());
+    let mut observed = request.clone();
+    observed["observe_from"] = finest[from].clone();
+    let got = run(Command::Signals, &observed);
+    assert_eq!(got["observed"], Value::Array(expected));
+    let stateless = run(Command::Signals, request);
+    for field in ["buy", "down_end", "sell", "mid_support"] {
+        assert_eq!(got[field], stateless[field], "{field}");
+    }
+}

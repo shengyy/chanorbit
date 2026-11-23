@@ -185,6 +185,19 @@ impl<'a> LevelRead<'a> {
             .any(|z| z.member_count() >= 3 && z.members_touch_core(&sub))
     }
 
+    /// The level's sequence from stroke `w0` on (window positions from 0),
+    /// the unfinished segment and the path after the extreme.
+    pub(crate) fn sequence(&self, w0: usize) -> Vec<Seg> {
+        (w0..self.n())
+            .map(|k| Seg {
+                pos: Pos::Stroke(k - w0),
+                ..self.seg(k)
+            })
+            .chain(self.unfinished)
+            .chain(self.after)
+            .collect()
+    }
+
     /// The qualified centres over the counted strokes.
     pub(crate) fn qualified_centres(&self) -> Vec<Centre> {
         let fs = read_strokes(self.c.strokes(), 0, self.finished, self.extension);
@@ -491,18 +504,31 @@ fn completion_in(
 /// completed: items 0–1 hold, and `last` is the latest element when it runs
 /// in `dir` from the departure position; `None` without the local centre.
 pub fn progress(r: &LevelRead, from: NaiveDateTime, dir: Direction) -> Option<MoveFact> {
-    let loc = local(r, from, None, dir, false)?;
+    progress_in(r, from, None, dir)
+}
+
+/// The move in progress read up to `until` (the last input when `None`),
+/// leaving out a stroke that starts there.
+fn progress_in(
+    r: &LevelRead,
+    from: NaiveDateTime,
+    until: Option<NaiveDateTime>,
+    dir: Direction,
+) -> Option<MoveFact> {
+    let loc = local(r, from, until, dir, true)?;
     let n = r.n();
     let latest = match r.unfinished {
-        Some(u) => (n, u),
-        None => (n - 1, r.seg(n - 1)),
+        _ if loc.k1 < n => (loc.k1 - 1, r.seg(loc.k1 - 1)),
+        // An unfinished segment starting at `until` lies after the span.
+        Some(u) if until.is_none_or(|t| u.start_at < t) => (n, u),
+        _ => (n - 1, r.seg(n - 1)),
     };
     let entry_area = r.area(&loc.entry);
     let candidate = Some(latest).filter(|(k, x)| x.direction == dir && loc.departs(*k));
     let (last, new_extreme, area_ratio, confirmed_at) = match candidate {
         Some((k, x)) => {
             let area = r.area(&x);
-            let ext = span_extreme(r, from, None, dir)
+            let ext = span_extreme(r, from, until, dir)
                 .filter(|&e| holds(&x, e) && loc.new_extreme(r, k, e, dir));
             let ratio = match (area, entry_area) {
                 (Some(a), Some(e)) if e > 0. => Some(a / e),
@@ -588,8 +614,6 @@ pub struct ParentDeparture {
 /// its departure is a stroke running up that no longer extends. The cores
 /// of the earlier qualified centres are kept for A5.
 pub fn parent_departure(p: &LevelRead) -> Option<ParentDeparture> {
-    let s = p.c.strokes();
-    let n = s.len();
     let mut qualified = p.qualified_centres();
     let z = qualified.pop()?;
     let earlier = qualified
@@ -597,14 +621,7 @@ pub fn parent_departure(p: &LevelRead) -> Option<ParentDeparture> {
         .map(|c| (c.core_low, c.core_high))
         .collect();
     let w0 = z.start - 1;
-    let segs: Vec<Seg> = (w0..n)
-        .map(|k| Seg {
-            pos: Pos::Stroke(k - w0),
-            ..p.seg(k)
-        })
-        .chain(p.unfinished)
-        .chain(p.after)
-        .collect();
+    let segs = p.sequence(w0);
     let State::Departed {
         departure: Pos::Stroke(i),
         direction: Direction::Up,
@@ -640,6 +657,69 @@ pub fn parent_departure(p: &LevelRead) -> Option<ParentDeparture> {
         entry_ratio,
         earlier,
     })
+}
+
+/// B, primed and C of a down move on the finer levels: from the child time
+/// on `m` of the parent high at `high_at` to the finest-level `low`. With
+/// `to_low` B and primed read `m` only up to its bar holding the low. The
+/// stage is `armed` when neither B nor primed holds.
+pub(crate) fn nest_below(
+    p: &LevelRead,
+    m: &LevelRead,
+    l: Option<&LevelRead>,
+    high_at: NaiveDateTime,
+    low: Endpoint,
+    to_low: bool,
+) -> (
+    Stage,
+    Option<MoveFact>,
+    Option<CompletionFact>,
+    Option<bool>,
+) {
+    // B: the pullback completes on the middle level at the low.
+    let t0 = covered_child(p.raw(), m.raw(), high_at, true);
+    let until = to_low
+        .then(|| m.raw().get(m.raw().partition_point(|b| b.dt < low.at)))
+        .flatten()
+        .map(|b| b.dt);
+    let mid = t0
+        .and_then(|t0| completion_in(m, t0, until, Direction::Down, until.is_some()))
+        .filter(|c| c.extreme.price == low.price);
+    // C, a veto on the leaf over the down move from the start of the middle
+    // level's last segment to the low (the finest level is the leaf, so the
+    // low's time is a leaf time): it completes there at the low, or no leaf
+    // centre lies inside it.
+    let leaf_span = match (&mid, l) {
+        (Some(mid), Some(l)) => {
+            covered_child(m.raw(), l.raw(), mid.last.start_at, true).map(|t0| (l, t0))
+        }
+        _ => None,
+    };
+    let leaf = leaf_span
+        .and_then(|(l, t0)| completion_to(l, t0, low.at, Direction::Down))
+        .filter(|c| c.extreme.price == low.price);
+    let turned = mid.as_ref().is_some_and(|c| c.fact.confirmed_at.is_some());
+    // C waits until the leaf element holding the low is a counted stroke.
+    let leaf_centre = leaf_span
+        .filter(|(l, _)| turned && l.counted_at(low.at))
+        .map(|(l, t0)| l.centre_within(t0, low.at));
+    let stage = match (&mid, leaf_centre) {
+        (Some(_), Some(centre)) if leaf.is_some() || !centre => Stage::Triggered,
+        (Some(_), _) if turned => Stage::Turned,
+        (Some(_), _) => Stage::Ripe,
+        (None, _) => Stage::Armed,
+    };
+    // Without B the move in progress, primed once its latest element leaves
+    // the local centre downward.
+    let mid = match mid {
+        Some(c) => Some(MoveFact::from(c.fact)),
+        None => t0.and_then(|t0| progress_in(m, t0, until, Direction::Down)),
+    };
+    let stage = match &mid {
+        Some(x) if stage == Stage::Armed && x.last.is_some() => Stage::Primed,
+        _ => stage,
+    };
+    (stage, mid, leaf.map(|c| c.fact), leaf_centre)
 }
 
 /// The buy-side nest over the parent `p`, the middle level `m` and the
@@ -685,46 +765,7 @@ pub fn buy(
     let (stage, mid, leaf, leaf_centre) = if passed || returned {
         (Stage::Armed, None, None, None)
     } else {
-        // B: the pullback completes on the middle level at the low.
-        let t0 = covered_child(p.raw(), m.raw(), d.end_at, true);
-        let mid = t0
-            .and_then(|t0| completion(m, t0, None, Direction::Down))
-            .filter(|c| c.extreme.price == low.price);
-        // C, a veto on the leaf over the down move from the start of the middle
-        // level's last segment to the low (the finest level is the leaf, so the
-        // low's time is a leaf time): it completes there at the low, or no leaf
-        // centre lies inside it.
-        let leaf_span = match (&mid, l) {
-            (Some(mid), Some(l)) => {
-                covered_child(m.raw(), l.raw(), mid.last.start_at, true).map(|t0| (l, t0))
-            }
-            _ => None,
-        };
-        let leaf = leaf_span
-            .and_then(|(l, t0)| completion_to(l, t0, low.at, Direction::Down))
-            .filter(|c| c.extreme.price == low.price);
-        let turned = mid.as_ref().is_some_and(|c| c.fact.confirmed_at.is_some());
-        // C waits until the leaf element holding the low is a counted stroke.
-        let leaf_centre = leaf_span
-            .filter(|(l, _)| turned && l.counted_at(low.at))
-            .map(|(l, t0)| l.centre_within(t0, low.at));
-        let stage = match (&mid, leaf_centre) {
-            (Some(_), Some(centre)) if leaf.is_some() || !centre => Stage::Triggered,
-            (Some(_), _) if turned => Stage::Turned,
-            (Some(_), _) => Stage::Ripe,
-            (None, _) => Stage::Armed,
-        };
-        // Without B the move in progress, primed once its latest element leaves
-        // the local centre downward.
-        let mid = match mid {
-            Some(c) => Some(MoveFact::from(c.fact)),
-            None => t0.and_then(|t0| progress(m, t0, Direction::Down)),
-        };
-        let stage = match &mid {
-            Some(x) if stage == Stage::Armed && x.last.is_some() => Stage::Primed,
-            _ => stage,
-        };
-        (stage, mid, leaf.map(|c| c.fact), leaf_centre)
+        nest_below(p, m, l, d.end_at, low, false)
     };
     let z = &dep.centre;
     Some(Buy {
