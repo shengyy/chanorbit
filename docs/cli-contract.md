@@ -12,7 +12,7 @@ chanorbit geometry --batch           # stdin: JSON Lines, one request per line; 
 chanorbit geometry --batch --jobs N  # N ≥ 1 worker threads (default: available CPUs)
 chanorbit stages [--batch [--jobs N]]  # the same, answering with the buy-side stages
 chanorbit levels [--batch [--jobs N]]  # one instrument, several period series: multi-level structure facts
-chanorbit signals [--batch [--jobs N]] # one instrument, 2 or 3 period series: buy- and sell-side nests
+chanorbit signals [--batch [--jobs N]] # one instrument, 2 or 3 period series: third-buy, down-end and up-end nests
 chanorbit --version | -V             # "chanorbit <version> schemas <geometry> <stages> <levels> <signals schema>"
 chanorbit --help | -h
 ```
@@ -196,11 +196,11 @@ Every `dt` labels the **end** of its bar's period, and a bar still forming carri
 }
 ```
 
-`signals`: one object with `schema` (`chanorbit.signals/1`), `id` (echo), `buy`, `sell`, `mid_support` and `observed` ([signals output](structure-contract.md#signals-output)). An example from three synthetic levels (30m, 5m, 1m), areas shortened; without the leaf level the same series answers `"stage": "turned"` with `leaf: null`:
+`signals`: one object with `schema` (`chanorbit.signals/2`), `id` (echo), `buy`, `down_end`, `sell`, `mid_support` and `observed` ([signals output](structure-contract.md#signals-output)). An example from three synthetic levels (30m, 5m, 1m), areas shortened; without the leaf level the same series answers `"stage": "turned"` with `leaf: null`:
 
 ```json
 {
-  "schema": "chanorbit.signals/1",
+  "schema": "chanorbit.signals/2",
   "id": "nest",
   "buy": {
     "stage": "triggered",
@@ -225,6 +225,7 @@ Every `dt` labels the **end** of its bar's period, and a bar still forming carri
     },
     "leaf_centre": true
   },
+  "down_end": null,
   "sell": null,
   "mid_support": {"low": 98.49, "low_at": "2026-01-06T22:30:00"},
   "observed": null
@@ -246,7 +247,36 @@ Cut at `2026-01-06T22:00:00`, before the new low, the same series answers `"stag
 
 `sell` has the same shape on both stages: `turned` when the middle level's top fractal at `U`'s high is confirmed (the only stage without the leaf level), `triggered` when the leaf completion is confirmed there, with `leaf`, `mid_divergent`, `mid_lower_high`, `parent_complete` and `parent_vs_departure` (`{"new_high": true, "area_ratio": 0.2231}` or `null`).
 
-With `observe_from`, `observed` holds rows such as `{"at": "2026-01-06T22:32:00", "side": "buy", "signal": {…the buy object at that step…}}`.
+`down_end` has the shape below on every stage; from another synthetic series (a 30m centre left downward by the unfinished segment, its 5m move completing at the low and the 1m move diverging inside the last 5m segment), areas shortened:
+
+```json
+"down_end": {
+  "stage": "triggered",
+  "key": "2026-01-08T11:00:00|2026-01-08T23:00:00|2026-01-09T02:30:00",
+  "centre": {"start_at": "2026-01-08T11:00:00", "zd": 94.99, "zg": 97.01, "dd": 90.39, "gg": 98.01, "member_count": 3},
+  "trend_centres": 1,
+  "departure": {"start_at": "2026-01-08T23:00:00", "end_at": "2026-01-09T02:30:00", "low": 86.99, "extending": true, "area": 3.3524, "area_ratio": 0.7845},
+  "low": {"price": 86.99, "at": "2026-01-09T02:30:00"},
+  "mid": {
+    "centre": {"start_at": "2026-01-08T23:40:00", "zd": 90.29, "zg": 91.31, "dd": 86.99, "gg": 92.01, "member_count": 4},
+    "entry": {"start_at": "2026-01-08T23:00:00", "end_at": "2026-01-08T23:40:00", "area": 3.4211},
+    "last": {"start_at": "2026-01-09T01:40:00", "end_at": "2026-01-09T02:30:00", "extending": false, "area": 0.4228},
+    "new_extreme": true,
+    "area_ratio": 0.1236,
+    "confirmed_at": "2026-01-09T02:40:00"
+  },
+  "leaf": {
+    "centre": {"start_at": "2026-01-09T01:52:00", "zd": 89.19, "zg": 89.61, "dd": 86.99, "gg": 89.71, "member_count": 4},
+    "entry": {"start_at": "2026-01-09T01:40:00", "end_at": "2026-01-09T01:52:00", "area": 1.4511},
+    "last": {"start_at": "2026-01-09T02:16:00", "end_at": "2026-01-09T02:30:00", "extending": false, "area": 1.1735},
+    "area_ratio": 0.8087,
+    "confirmed_at": "2026-01-09T02:32:00"
+  },
+  "leaf_centre": true
+}
+```
+
+With `observe_from`, `observed` holds rows such as `{"at": "2026-01-06T22:32:00", "side": "buy", "signal": {…the buy object at that step…}}`; `side` is `buy`, `down_end` or `sell`.
 
 Every time is written as `YYYY-MM-DDTHH:MM:SS`, the same format as the input.
 

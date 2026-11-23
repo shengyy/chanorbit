@@ -7,6 +7,7 @@ use crate::bar::RawBar;
 use crate::centre::Centre;
 use crate::macd::{MacdSeries, PARAMS, macd_series};
 use crate::signal::{Buy, LevelRead, ParentDeparture, Stage, buy, parent_departure};
+use crate::signal_down::{DownEnd, ParentDown, down_end, parent_down};
 use crate::signal_sell::{
     ParentFacts, Sell, Support, VersusDeparture, mid_centres, mid_support, parent_complete, sell,
     versus_departure,
@@ -15,19 +16,21 @@ use chrono::NaiveDateTime;
 use serde::Serialize;
 use std::collections::HashSet;
 
-/// The nests after one step: `buy` (`third_buy_nest`), `sell`
-/// (`up_end_nest`) and the middle level's support.
+/// The nests after one step: `buy` (`third_buy_nest`), `down_end`
+/// (`down_end_nest`), `sell` (`up_end_nest`) and the middle level's support.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct Signals {
     pub buy: Option<Buy>,
+    pub down_end: Option<DownEnd>,
     pub sell: Option<Sell>,
     pub mid_support: Option<Support>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Side {
     Buy,
+    DownEnd,
     Sell,
 }
 
@@ -35,6 +38,7 @@ pub enum Side {
 #[serde(untagged)]
 pub enum Signal {
     Buy(Box<Buy>),
+    DownEnd(Box<DownEnd>),
     Sell(Box<Sell>),
 }
 
@@ -54,6 +58,7 @@ pub struct Observed {
 #[derive(Default)]
 struct Memo {
     parent: Option<(usize, Option<ParentDeparture>, Option<VersusDeparture>)>,
+    parent_down: Option<(usize, Option<ParentDown>)>,
     centres: Option<(usize, Vec<Centre>)>,
     parent_complete: Option<((usize, usize), bool)>,
 }
@@ -73,6 +78,10 @@ fn evaluate(levels: &[Analyzer], macd: &[MacdSeries], memo: &mut Memo) -> Signal
         Some((_, dep, versus)) => (dep.as_ref(), *versus),
         None => unreachable!("set above"),
     };
+    if memo.parent_down.as_ref().is_none_or(|x| x.0 != lens.0) {
+        memo.parent_down = Some((lens.0, parent_down(p)));
+    }
+    let down = memo.parent_down.as_ref().and_then(|x| x.1.as_ref());
     if memo.centres.as_ref().is_none_or(|x| x.0 != lens.1) {
         memo.centres = Some((lens.1, mid_centres(m)));
     }
@@ -86,6 +95,7 @@ fn evaluate(levels: &[Analyzer], macd: &[MacdSeries], memo: &mut Memo) -> Signal
     };
     Signals {
         buy: buy(p, m, l, dep),
+        down_end: down_end(p, m, l, down),
         sell: sell(m, l, centres, parent),
         mid_support: mid_support(m),
     }
@@ -133,7 +143,7 @@ pub fn signals(
     let mut levels: Vec<Analyzer> = series.iter().map(|_| Analyzer::new(config)).collect();
     let mut fed = vec![0usize; series.len()];
     let mut memo = Memo::default();
-    let mut seen: HashSet<(bool, String, Stage)> = HashSet::new();
+    let mut seen: HashSet<(Side, String, Stage)> = HashSet::new();
     let mut observed = Vec::new();
     let feed_until = |levels: &mut [Analyzer], fed: &mut [usize], t: Option<NaiveDateTime>| {
         for (k, s) in series.iter().enumerate().take(finest) {
@@ -152,7 +162,7 @@ pub fn signals(
         }
         let now = evaluate(&levels, &macd, &mut memo);
         if let Some(b) = now.buy.as_ref().filter(|b| b.stage != Stage::Armed)
-            && seen.insert((true, b.key.clone(), b.stage))
+            && seen.insert((Side::Buy, b.key.clone(), b.stage))
         {
             observed.push(Observed {
                 at: bar.dt,
@@ -160,8 +170,17 @@ pub fn signals(
                 signal: Signal::Buy(Box::new(b.clone())),
             });
         }
+        if let Some(d) = now.down_end.as_ref().filter(|d| d.stage != Stage::Armed)
+            && seen.insert((Side::DownEnd, d.key.clone(), d.stage))
+        {
+            observed.push(Observed {
+                at: bar.dt,
+                side: Side::DownEnd,
+                signal: Signal::DownEnd(Box::new(d.clone())),
+            });
+        }
         if let Some(s) = &now.sell
-            && seen.insert((false, s.key.clone(), s.stage))
+            && seen.insert((Side::Sell, s.key.clone(), s.stage))
         {
             observed.push(Observed {
                 at: bar.dt,

@@ -6,6 +6,7 @@ use crate::geometry::{Geometry, geometry};
 use crate::levels_child::{LevelOut, levels};
 use crate::observe::{StageFact, observed_stages};
 use crate::signal::Buy;
+use crate::signal_down::DownEnd;
 use crate::signal_observe::{Observed, signals};
 use crate::signal_sell::{Sell, Support};
 use chrono::NaiveDateTime;
@@ -20,7 +21,7 @@ pub const STAGES_SCHEMA: &str = "chanorbit.stages/3";
 /// Output contract version of `levels`.
 pub const LEVELS_SCHEMA: &str = "chanorbit.levels/3";
 /// Output contract version of `signals`.
-pub const SIGNALS_SCHEMA: &str = "chanorbit.signals/1";
+pub const SIGNALS_SCHEMA: &str = "chanorbit.signals/2";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Command {
@@ -121,6 +122,7 @@ pub struct SignalsResponse {
     pub schema: String,
     pub id: Value,
     pub buy: Option<Buy>,
+    pub down_end: Option<DownEnd>,
     pub sell: Option<Sell>,
     pub mid_support: Option<Support>,
     /// With `observe_from` only; `null` without it.
@@ -388,6 +390,7 @@ pub fn run_signals(req: SignalsRequest) -> Result<SignalsResponse, ErrorResponse
         schema: SIGNALS_SCHEMA.into(),
         id: req.id,
         buy: now.buy,
+        down_end: now.down_end,
         sell: now.sell,
         mid_support: now.mid_support,
         observed,
