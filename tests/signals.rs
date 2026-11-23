@@ -408,6 +408,32 @@ fn a_departure_from_the_local_centre_primes_the_nest() {
     );
 }
 
+/// `departure.entry_ratio` is the departure's area over the up entry
+/// stroke's, and `null` when the centre is entered from above.
+#[test]
+fn the_departure_is_compared_with_an_up_entry() {
+    for (high, bars, weaker) in [(104.0, 240, true), (110.0, 480, false)] {
+        let b = buy(&request(&entry_up_path(high, bars), false));
+        assert_eq!(b["stage"], "turned");
+        assert_eq!(b["centre"]["zg"], 95.01);
+        let d = &b["departure"];
+        let ratio = d["entry_ratio"].as_f64().unwrap();
+        assert!(d["area"].as_f64().unwrap() > 0.0);
+        assert_eq!(ratio < 1.0, weaker, "{ratio}");
+    }
+    // Entered by a down stroke: the departure has an area, the ratio none.
+    let b = buy(&request(&entry_down_path(), false));
+    assert_eq!(b["stage"], "turned");
+    assert!(b["departure"]["area"].as_f64().unwrap() > 0.0);
+    assert_eq!(b["departure"]["entry_ratio"], Value::Null);
+    // Without 30m MACD neither is available.
+    let b = buy(&request(&base(), false));
+    assert_eq!(
+        (&b["departure"]["area"], &b["departure"]["entry_ratio"]),
+        (&Value::Null, &Value::Null)
+    );
+}
+
 /// Each level truncated to the bars labelled no later than `t`.
 fn truncated(request: &Value, t: &str) -> Value {
     let mut out = request.clone();
@@ -482,6 +508,9 @@ fn stateless_truncation_equals_the_replay() {
         ),
         500,
     );
+    // An up entry: the ratio at each step is read from the strokes then.
+    let m = entry_up_path(104.0, 240);
+    replay_equals_truncation(&request(&m, false), m.len() / 5 - 60);
     // Sell, 3 levels (triggered) and 2 levels (turned).
     let m = sell_base((98.0, 14), &[(97.3, 20)]);
     replay_equals_truncation(&request(&m, true), 1550);
