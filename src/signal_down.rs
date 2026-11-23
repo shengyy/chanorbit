@@ -131,21 +131,21 @@ pub fn down_end(
     let d = pd.departure;
     let z = &pd.centre;
     let finest = l.unwrap_or(m).raw();
-    // A4: the finest low after `D`'s start is `D`'s low, and no finest bar
-    // after it has reached back to `zd`.
+    // A4: the finest low after `D`'s start (below `D`'s own low when a parent
+    // bar holding it has not closed), and no finest bar after it has reached
+    // back to `zd`.
     let t_start = covered_child(p.raw(), finest, d.start_at, true)?;
     let low = extreme(
         &finest[finest.partition_point(|b| b.dt <= t_start)..],
         Direction::Down,
     )?;
-    if low.price != pd.low.price
-        || finest[finest.partition_point(|b| b.dt <= low.at)..]
-            .iter()
-            .any(|b| b.high >= z.core_low)
+    if finest[finest.partition_point(|b| b.dt <= low.at)..]
+        .iter()
+        .any(|b| b.high >= z.core_low)
     {
         return None;
     }
-    let (stage, mid, leaf, leaf_centre) = nest_below(p, m, l, d.start_at, low);
+    let (stage, mid, leaf, leaf_centre) = nest_below(p, m, l, d.start_at, low, true);
     Some(DownEnd {
         stage,
         key: format!(

@@ -504,9 +504,21 @@ fn completion_in(
 /// completed: items 0–1 hold, and `last` is the latest element when it runs
 /// in `dir` from the departure position; `None` without the local centre.
 pub fn progress(r: &LevelRead, from: NaiveDateTime, dir: Direction) -> Option<MoveFact> {
-    let loc = local(r, from, None, dir, false)?;
+    progress_in(r, from, None, dir)
+}
+
+/// The move in progress read up to `until` (the last input when `None`),
+/// leaving out a stroke that starts there.
+fn progress_in(
+    r: &LevelRead,
+    from: NaiveDateTime,
+    until: Option<NaiveDateTime>,
+    dir: Direction,
+) -> Option<MoveFact> {
+    let loc = local(r, from, until, dir, true)?;
     let n = r.n();
     let latest = match r.unfinished {
+        _ if loc.k1 < n => (loc.k1 - 1, r.seg(loc.k1 - 1)),
         Some(u) => (n, u),
         None => (n - 1, r.seg(n - 1)),
     };
@@ -515,7 +527,7 @@ pub fn progress(r: &LevelRead, from: NaiveDateTime, dir: Direction) -> Option<Mo
     let (last, new_extreme, area_ratio, confirmed_at) = match candidate {
         Some((k, x)) => {
             let area = r.area(&x);
-            let ext = span_extreme(r, from, None, dir)
+            let ext = span_extreme(r, from, until, dir)
                 .filter(|&e| holds(&x, e) && loc.new_extreme(r, k, e, dir));
             let ratio = match (area, entry_area) {
                 (Some(a), Some(e)) if e > 0. => Some(a / e),
@@ -647,7 +659,8 @@ pub fn parent_departure(p: &LevelRead) -> Option<ParentDeparture> {
 }
 
 /// B, primed and C of a down move on the finer levels: from the child time
-/// on `m` of the parent high at `high_at` to the finest-level `low`. The
+/// on `m` of the parent high at `high_at` to the finest-level `low`. With
+/// `to_low` B and primed read `m` only up to its bar holding the low. The
 /// stage is `armed` when neither B nor primed holds.
 pub(crate) fn nest_below(
     p: &LevelRead,
@@ -655,6 +668,7 @@ pub(crate) fn nest_below(
     l: Option<&LevelRead>,
     high_at: NaiveDateTime,
     low: Endpoint,
+    to_low: bool,
 ) -> (
     Stage,
     Option<MoveFact>,
@@ -663,8 +677,12 @@ pub(crate) fn nest_below(
 ) {
     // B: the pullback completes on the middle level at the low.
     let t0 = covered_child(p.raw(), m.raw(), high_at, true);
+    let until = to_low
+        .then(|| m.raw().get(m.raw().partition_point(|b| b.dt < low.at)))
+        .flatten()
+        .map(|b| b.dt);
     let mid = t0
-        .and_then(|t0| completion(m, t0, None, Direction::Down))
+        .and_then(|t0| completion_in(m, t0, until, Direction::Down, until.is_some()))
         .filter(|c| c.extreme.price == low.price);
     // C, a veto on the leaf over the down move from the start of the middle
     // level's last segment to the low (the finest level is the leaf, so the
@@ -694,7 +712,7 @@ pub(crate) fn nest_below(
     // the local centre downward.
     let mid = match mid {
         Some(c) => Some(MoveFact::from(c.fact)),
-        None => t0.and_then(|t0| progress(m, t0, Direction::Down)),
+        None => t0.and_then(|t0| progress_in(m, t0, until, Direction::Down)),
     };
     let stage = match &mid {
         Some(x) if stage == Stage::Armed && x.last.is_some() => Stage::Primed,
@@ -746,7 +764,7 @@ pub fn buy(
     let (stage, mid, leaf, leaf_centre) = if passed || returned {
         (Stage::Armed, None, None, None)
     } else {
-        nest_below(p, m, l, d.end_at, low)
+        nest_below(p, m, l, d.end_at, low, false)
     };
     let z = &dep.centre;
     Some(Buy {

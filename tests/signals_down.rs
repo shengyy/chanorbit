@@ -110,12 +110,25 @@ fn every_stage_of_the_down_end() {
         armed["low"],
         json!({"price": 89.49, "at": "2026-01-08T23:40:00"})
     );
-    // The latest 5m element leaves the 5m centre downward above the low.
-    let primed = down(&request(&cut(&m, 5880), false));
+    // The 5m centre built after the low is not part of the move to it:
+    // the 5m reading stops at the low, which has no local centre before it.
+    let later = down(&request(&cut(&m, 5880), false));
+    assert_eq!(
+        (&later["stage"], &later["key"]),
+        (&json!("armed"), &armed["key"])
+    );
+    assert_eq!(later["mid"], Value::Null);
+    // With 1m: a new 1m low inside a 5m bar that has not closed (and a 30m
+    // bar, so below the departure's low); the 5m move to it leaves the 5m
+    // centre to the new low without having completed yet.
+    let primed = down(&request(&cut(&m, 5931), true));
     assert_eq!(primed["stage"], "primed");
-    assert_eq!(primed["key"], armed["key"]);
-    assert_eq!(primed["mid"]["new_extreme"], false);
-    assert_eq!(primed["mid"]["last"]["extending"], true);
+    assert_eq!(
+        (&primed["low"]["price"], &primed["departure"]["low"]),
+        (&json!(88.95), &json!(89.49))
+    );
+    assert_eq!(primed["mid"]["new_extreme"], true);
+    assert!(primed["mid"]["last"].is_object());
     // The 30m bar holding the new low has closed: a new key, complete on 5m.
     let ripe = down(&request(&cut(&m, 5940), false));
     assert_eq!(ripe["stage"], "ripe");
@@ -167,9 +180,10 @@ fn every_stage_of_the_down_end() {
     assert_eq!((&all["buy"], &all["sell"]), (&Value::Null, &Value::Null));
 }
 
-/// A finest low below the parent's (inside a 30m bar that has not closed)
-/// stands no nest; once that bar closes the new low is a new key with the
-/// same centre and departure.
+/// A finest low below the parent's, inside a 30m bar that has not closed,
+/// belongs to the departure: it is a new key at once, below
+/// `departure.low` until that bar closes, with the same centre and
+/// departure.
 #[test]
 fn a_new_low_is_a_new_key() {
     let m = fast();
@@ -178,7 +192,19 @@ fn a_new_low_is_a_new_key() {
         before["key"],
         "2026-01-08T11:00:00|2026-01-08T23:00:00|2026-01-09T01:55:00"
     );
-    assert_eq!(down(&request(&cut(&m, 5905), false)), Value::Null);
+    let inside = down(&request(&cut(&m, 5905), false));
+    assert_eq!(
+        inside["key"],
+        "2026-01-08T11:00:00|2026-01-08T23:00:00|2026-01-09T02:25:00"
+    );
+    assert_eq!(
+        (
+            &inside["stage"],
+            &inside["low"]["price"],
+            &inside["departure"]["low"]
+        ),
+        (&json!("ripe"), &json!(87.92), &json!(88.99))
+    );
     let after = down(&request(&cut(&m, 5910), false));
     assert_eq!(
         after["key"],
@@ -189,7 +215,56 @@ fn a_new_low_is_a_new_key() {
         after["departure"]["start_at"],
         before["departure"]["start_at"]
     );
-    assert_eq!(after["low"]["price"], 86.99);
+    assert_eq!(
+        (&after["low"]["price"], &after["departure"]["low"]),
+        (&json!(86.99), &json!(86.99))
+    );
+}
+
+fn rank(stage: &Value) -> usize {
+    ["armed", "primed", "ripe", "turned", "triggered"]
+        .iter()
+        .position(|s| stage == s)
+        .unwrap()
+}
+
+/// Over every truncation from `from` on, the stage of a key never moves
+/// back; returns the highest rank reached.
+fn never_steps_back(request: &Value, from: usize) -> usize {
+    let finest = request["levels"].as_array().unwrap().last().unwrap()["dt"]
+        .as_array()
+        .unwrap()
+        .clone();
+    let mut seen = std::collections::HashMap::new();
+    let mut top = 0;
+    for t in &finest[from..] {
+        let d = down(&truncated(request, t.as_str().unwrap()));
+        if d.is_null() {
+            continue;
+        }
+        let r = rank(&d["stage"]);
+        let r0 = seen.entry(d["key"].to_string()).or_insert(r);
+        assert!(r >= *r0, "{t}: {} back to {}", d["key"], d["stage"]);
+        *r0 = r;
+        top = top.max(r);
+    }
+    top
+}
+
+/// The 5m reading stops at the low: a rally after it that builds 5m
+/// structure while the 30m rebound is still uncounted (bar 6170, where the
+/// open span went back to `primed`) leaves the key at `turned`, and no key
+/// of these series steps back.
+#[test]
+fn the_stage_of_a_key_never_steps_back() {
+    let m = down_path(&TOP, &FAST, &[(93.0, 240), (90.0, 240)]);
+    let rally = down(&request(&cut(&m, 6170), false));
+    assert_eq!(
+        (&rally["stage"], &rally["low"]["price"]),
+        (&json!("turned"), &json!(86.99))
+    );
+    assert_eq!(never_steps_back(&request(&m, false), D_AT / 5), 3);
+    assert_eq!(never_steps_back(&request(&slow(), true), D_AT + 200), 3);
 }
 
 /// A1: a departure to the centre's lowest low (90.39, `new_extreme` false)
@@ -289,7 +364,8 @@ fn trend_centres_count_cores_stepping_down() {
 
 /// The replay records `down_end` rows as the stateless calls on each
 /// truncation do, between `buy` and `sell` within a step; on the slow
-/// series a row for `primed`, then the new low's `ripe` and `turned`.
+/// series each 5m low below the departure's low inside the open 30m bar is a
+/// `ripe` key, then the low's `turned`.
 #[test]
 fn down_end_replay_equals_truncation() {
     replay_equals_truncation(&request(&fast(), false), D_AT / 5);
@@ -312,7 +388,8 @@ fn down_end_replay_equals_truncation() {
     assert_eq!(
         rows,
         [
-            r#""2026-01-09T02:00:00" "down_end" "primed" "2026-01-08T23:40:00""#,
+            r#""2026-01-09T02:50:00" "down_end" "ripe" "2026-01-09T02:50:00""#,
+            r#""2026-01-09T02:55:00" "down_end" "ripe" "2026-01-09T02:55:00""#,
             r#""2026-01-09T03:00:00" "down_end" "ripe" "2026-01-09T03:00:00""#,
             r#""2026-01-09T03:10:00" "down_end" "turned" "2026-01-09T03:00:00""#,
         ]
