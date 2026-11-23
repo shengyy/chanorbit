@@ -206,7 +206,7 @@ Every `dt` labels the **end** of its bar's period, and a bar still forming carri
     "stage": "triggered",
     "key": "2026-01-05T23:00:00|2026-01-06T19:00:00|2026-01-06T22:26:00",
     "centre": {"start_at": "2026-01-05T23:00:00", "zd": 91.99, "zg": 95.01, "dd": 89.99, "gg": 104.01, "member_count": 5},
-    "departure": {"start_at": "2026-01-06T15:00:00", "end_at": "2026-01-06T19:00:00", "high": 104.01, "new_extreme": true, "area": null},
+    "departure": {"start_at": "2026-01-06T15:00:00", "end_at": "2026-01-06T19:00:00", "high": 104.01, "new_extreme": true, "area": null, "entry_ratio": null},
     "pullback": {"low": 98.49, "low_at": "2026-01-06T22:26:00"},
     "mid": {
       "centre": {"start_at": "2026-01-06T19:40:00", "zd": 99.99, "zg": 101.51, "dd": 98.49, "gg": 102.01, "member_count": 4},

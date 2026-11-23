@@ -545,6 +545,9 @@ pub struct DepartureFact {
     pub high: f64,
     pub new_extreme: bool,
     pub area: Option<f64>,
+    /// `area` over the centre's entry stroke's same-direction area when that
+    /// entry runs up (both available, the entry's positive), otherwise `null`.
+    pub entry_ratio: Option<f64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -576,6 +579,7 @@ pub struct ParentDeparture {
     stroke: Seg,
     new_extreme: bool,
     area: Option<f64>,
+    entry_ratio: Option<f64>,
     /// `[zd, zg]` of every qualified centre before `centre`.
     earlier: Vec<(f64, f64)>,
 }
@@ -616,12 +620,24 @@ pub fn parent_departure(p: &LevelRead) -> Option<ParentDeparture> {
         return None;
     }
     let stroke = p.seg(index);
+    let area = p.area(&stroke);
+    // The entry stroke as read at this step, compared only when it runs up
+    // like the departure.
+    let entry = p.seg(w0);
+    let entry_area = (entry.direction == Direction::Up)
+        .then(|| p.area(&entry))
+        .flatten();
+    let entry_ratio = match (area, entry_area) {
+        (Some(a), Some(e)) if e > 0. => Some(a / e),
+        _ => None,
+    };
     Some(ParentDeparture {
         centre: z,
         index,
         stroke,
         new_extreme,
-        area: p.area(&stroke),
+        area,
+        entry_ratio,
         earlier,
     })
 }
@@ -726,6 +742,7 @@ pub fn buy(
             high: h_dep,
             new_extreme: dep.new_extreme,
             area: dep.area,
+            entry_ratio: dep.entry_ratio,
         },
         pullback: Pullback {
             low: low.price,

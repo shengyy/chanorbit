@@ -116,6 +116,37 @@ pub fn pullback(low: f64, bars: usize) -> Vec<(f64, usize)> {
     ]
 }
 
+/// A 30m centre (members 99.6 → 92, 95, 93, then the departure) entered by
+/// an up stroke from an earlier centre around 82–88, with a flat start long
+/// enough for 30m MACD; the departure runs from 93 to `high` over `bars` 1m
+/// bars, then the base pullback and a rise.
+pub fn entry_up_path(high: f64, bars: usize) -> Vec<RawBar> {
+    let mut legs = vec![
+        (85.0, 4500),
+        (88.0, 240),
+        (82.0, 240),
+        (87.0, 240),
+        (83.0, 240),
+        (99.6, 240),
+        (92.0, 240),
+        (95.0, 240),
+        (93.0, 240),
+        (high, bars),
+    ];
+    legs.extend(pullback(98.5, 10));
+    legs.push((99.5, 20));
+    path(85.0, &legs)
+}
+
+/// The base parent entered by a down stroke, with the same long flat start.
+pub fn entry_down_path() -> Vec<RawBar> {
+    let mut legs = parent(95.0);
+    legs[0] = (100.0, 4500);
+    legs.extend(pullback(98.5, 10));
+    legs.push((99.5, 20));
+    path(100.0, &legs)
+}
+
 /// The parent, the pullback and `tail`.
 pub fn buy_path(p3: f64, pull: Vec<(f64, usize)>, tail: &[(f64, usize)]) -> Vec<RawBar> {
     let mut legs = parent(p3);

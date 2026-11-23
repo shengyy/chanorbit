@@ -308,7 +308,7 @@ Items 1–3 make the move **complete**; with item 4 it is **confirmed**. While `
 ### Third-buy nest (`buy`)
 
 - **A**, on `P`:
-  - A1. The latest qualified centre `Z` (over the counted strokes) is in [state](#centre-state) `departed` through `zg`, and its departure `D` is a stroke running up that is not moving. `H_dep` is `D`'s high (its raw extreme); `new_extreme` is that state's.
+  - A1. The latest qualified centre `Z` (over the counted strokes) is in [state](#centre-state) `departed` through `zg`, and its departure `D` is a stroke running up that is not moving. `H_dep` is `D`'s high (its raw extreme); `new_extreme` is that state's. `entry_ratio` compares `D` with `Z`'s entry stroke `E` (the stroke before `Z`'s first member, as read at that step): when `E` runs up, `D`'s same-direction area over `E`'s (both available, `E`'s positive); otherwise `null`. It is a fact, not a condition of any stage.
   - A2. `L_P` is the lowest low of the finest level's bars after the child time of `D`'s high (first bar holding it), and `L_P > zg`.
   - A3. No `P` stroke after `D` runs up with an end whose child time on the finest level (its parent bar's time when no finer bar lies in it) is before `L_P`'s bar: no completed parent up stroke between `D`'s high and `L_P`.
   - A4. Every finest bar after `L_P`'s bar has a high strictly below `H_dep`.
@@ -343,7 +343,7 @@ MACD is causal, so the series' values are computed once and read up to each step
 
 | Field | Meaning |
 |---|---|
-| `buy` | `null` or `stage` (`armed`, `primed`, `ripe`, `turned`, `triggered`), `key`, `centre` (`Z`), `departure` {`start_at`, `end_at`, `high` (`H_dep`), `new_extreme`, `area` (`P` area or `null`)}, `pullback` {`low` (`L_P`), `low_at`}, `mid` (a move or `null`), `leaf` (C's completion over `[t0, t_LP]` or `null`, computed once B holds), `leaf_centre` (`true`, `false` or `null`) |
+| `buy` | `null` or `stage` (`armed`, `primed`, `ripe`, `turned`, `triggered`), `key`, `centre` (`Z`), `departure` {`start_at`, `end_at`, `high` (`H_dep`), `new_extreme`, `area` (`P` area or `null`), `entry_ratio` (`area` over the up entry's area, or `null`)}, `pullback` {`low` (`L_P`), `low_at`}, `mid` (a move or `null`), `leaf` (C's completion over `[t0, t_LP]` or `null`, computed once B holds), `leaf_centre` (`true`, `false` or `null`) |
 | `sell` | `null` or `stage` (`turned`, `triggered`), `key`, `segment` {`start_at`, `end_at`, `high`, `extending` (moving), `area` or `null`} (`U`), `leaf` (a completion or `null`), `mid_divergent`, `mid_lower_high`, `parent_complete`, `parent_vs_departure` {`new_high`, `area_ratio` or `null`} or `null` |
 | `mid_support` | `null` or {`low`, `low_at`} |
 | completion | `centre` {`start_at`, `zd`, `zg`, `dd`, `gg`, `member_count`} of the local centre (`member_count` as is: nine or more members mean the finer move has grown into a centre of its own), `entry` {`start_at`, `end_at`, `area`}, `last` {`start_at`, `end_at`, `extending`, `area`} (`x`), `area_ratio` (`last.area / entry.area`), `confirmed_at` or `null` |

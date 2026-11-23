@@ -4,6 +4,7 @@
 
 ### Added
 
+- `signals` (version 0.2.1): `buy.departure.entry_ratio` — when the parent centre's entry stroke runs up like the departure, the departure's same-direction MACD area over the entry stroke's (both available, the entry's positive), read from the strokes at that step; otherwise `null`. Only a field is added: schema `chanorbit.signals/1` and every other value unchanged.
 - Structure engine: inclusion, fractals, strokes with extension, same-time revision, canonical stroke centres, MACD(12, 26, 9) interval power, candidate stroke and the geometry snapshot.
 - `chanorbit geometry` command: one JSON object of columnar bars (`dt` as `YYYY-MM-DDTHH:MM:SS`, positive prices up to 1e9, volume up to 1e15, at most 200,000 bars) with non-decreasing `dt` (adjacent equal times are revisions, a decrease is an error), per-line errors including non-UTF-8 lines, single request or JSON Lines batch on stdin, deterministic output order; one geometry snapshot per request with each fact once; schema `chanorbit.geometry/1`.
 - Regression baselines in `tests/golden/` and an end-to-end stdin→stdout test.
