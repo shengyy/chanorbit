@@ -31,8 +31,11 @@ fn the_sell_nest_mirrors_the_buy_side() {
         json!({"low": 95.49, "low_at": "2026-01-06T01:40:00"})
     );
     assert_eq!(got["buy"], Value::Null);
-    // No 30m centre: nothing to compare the upswing with.
-    assert_eq!(s["parent_vs_departure"], Value::Null);
+    // No 30m centre: no departure to compare the upswing with.
+    assert_eq!(
+        (&s["parent_departure"], &s["parent_vs_departure"]),
+        (&Value::Null, &Value::Null)
+    );
     // Without the leaf level the 5m top at the high turns it, same key.
     let two = sell(&request(&m, false));
     assert_eq!(
@@ -59,25 +62,37 @@ fn a_confirmed_mid_top_turns_the_sell_nest() {
 }
 
 /// The 30m upswing after the retest against the departure that left the
-/// 30m centre (to 104.01): a new high or not. A long flat start readies
-/// the 30m MACD.
+/// 30m centre (to 104.01): a new high or not, read against
+/// `parent_departure.high`; while the retest has no 30m up element yet, the
+/// latest 30m up element is the departure itself and only the departure is
+/// output. A long flat start readies the 30m MACD.
 #[test]
 fn the_parent_upswing_against_its_departure() {
-    let versus = |high: f64| {
+    let after_retest = |tail: &[(f64, usize)]| {
         let mut legs = vec![(100.0, 3000)];
         legs.extend(parent(95.0).into_iter().skip(1));
         legs.extend(pullback(98.5, 10));
-        legs.extend([(high, 240), (high - 1.0, 60)]);
+        legs.extend_from_slice(tail);
         let s = sell(&request(&path(100.0, &legs), false));
         assert_eq!(s["stage"], "turned");
+        assert_eq!(
+            s["parent_departure"],
+            json!({"start_at": "2026-01-08T02:00:00", "end_at": "2026-01-08T06:00:00", "high": 104.01})
+        );
         s["parent_vs_departure"].clone()
     };
-    let over = versus(106.0);
+    // The 5m segment holds the 30m upswing's high: 106.01, 104.01 (equal
+    // to the departure's, not new) and 103.01.
+    let over = after_retest(&[(106.0, 240), (105.0, 60)]);
     assert_eq!(over["new_high"], true);
     assert!(over["area_ratio"].as_f64().unwrap() > 0.0);
-    let under = versus(103.0);
+    let equal = after_retest(&[(104.0, 240), (103.0, 60)]);
+    assert_eq!(equal["new_high"], false);
+    let under = after_retest(&[(103.0, 240), (102.0, 60)]);
     assert_eq!(under["new_high"], false);
     assert!(under["area_ratio"].as_f64().unwrap() > 0.0);
+    // A 5m top inside the retest, to 99.51: no comparison yet.
+    assert_eq!(after_retest(&[(99.5, 20), (99.0, 20)]), Value::Null);
 }
 
 #[test]

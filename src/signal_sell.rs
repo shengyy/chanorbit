@@ -24,6 +24,15 @@ pub struct SegmentFact {
     pub area: Option<f64>,
 }
 
+/// `D_P`: the departure of the latest parent centre left upward through
+/// `zg` by an element running up.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize)]
+pub struct UpDeparture {
+    pub start_at: NaiveDateTime,
+    pub end_at: NaiveDateTime,
+    pub high: f64,
+}
+
 /// The parent's latest up segment against the departure of the latest
 /// parent centre left upward.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize)]
@@ -43,6 +52,7 @@ pub struct Sell {
     pub mid_divergent: bool,
     pub mid_lower_high: bool,
     pub parent_complete: bool,
+    pub parent_departure: Option<UpDeparture>,
     pub parent_vs_departure: Option<VersusDeparture>,
 }
 
@@ -57,7 +67,15 @@ pub struct Support {
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ParentFacts {
     pub complete: bool,
-    pub versus_departure: Option<VersusDeparture>,
+    pub up: ParentUp,
+}
+
+/// `parent_departure` (`D_P`) and `parent_vs_departure`, read from the
+/// parent level alone.
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct ParentUp {
+    pub departure: Option<UpDeparture>,
+    pub versus: Option<VersusDeparture>,
 }
 
 /// The completion of `level` in direction up over the span of `s`, a segment
@@ -127,7 +145,8 @@ pub fn sell(
         mid_divergent: diverges_previous || departs_centre,
         mid_lower_high,
         parent_complete: parent.complete,
-        parent_vs_departure: parent.versus_departure,
+        parent_departure: parent.up.departure,
+        parent_vs_departure: parent.up.versus,
     })
 }
 
@@ -139,18 +158,42 @@ pub fn parent_complete(p: &LevelRead, m: &LevelRead) -> bool {
         .is_some()
 }
 
-/// `parent_vs_departure`: the parent's latest up segment `U` against the
-/// departure `D` of the latest qualified parent centre departed upward
-/// through `zg` by an element running up: a high strictly over `D`'s and the
-/// ratio of their up areas. `None` without such a `D` or when `U` does not
-/// start after it.
-pub fn versus_departure(p: &LevelRead) -> Option<VersusDeparture> {
-    let (_, u) = p.latest_up()?;
-    let u = &u;
+/// `parent_departure` and `parent_vs_departure`: `D_P`, the departure of the
+/// latest qualified parent centre departed upward through `zg` by an element
+/// running up, and the parent's latest up segment `U` against it: a high
+/// strictly over `D_P`'s and the ratio of their up areas. Both `None` without
+/// `D_P`; the comparison `None` also when `U` does not start after it.
+pub fn versus_departure(p: &LevelRead) -> ParentUp {
+    let Some(d) = departure_up(p) else {
+        return ParentUp::default();
+    };
+    let high = side_price(&d, Direction::Up);
+    let versus = p
+        .latest_up()
+        .filter(|(_, u)| u.start_at >= d.end_at)
+        .map(|(_, u)| VersusDeparture {
+            new_high: u.end_price > high,
+            area_ratio: match (p.area(&u), p.area(&d)) {
+                (Some(a), Some(b)) if b > 0. => Some(a / b),
+                _ => None,
+            },
+        });
+    ParentUp {
+        departure: Some(UpDeparture {
+            start_at: d.start_at,
+            end_at: d.end_at,
+            high,
+        }),
+        versus,
+    }
+}
+
+/// `D_P` on the parent's canonical sequence, latest qualified centre first.
+fn departure_up(p: &LevelRead) -> Option<Seg> {
     let qualified = p.qualified_centres();
     let w0 = qualified.first()?.start - 1;
     let segs = p.sequence(w0);
-    let d = (0..qualified.len()).rev().find_map(|k| {
+    (0..qualified.len()).rev().find_map(|k| {
         match centre_state(p.raw(), &segs, w0, &qualified[k], qualified.get(k + 1), k) {
             State::Departed {
                 departure,
@@ -160,17 +203,6 @@ pub fn versus_departure(p: &LevelRead) -> Option<VersusDeparture> {
             } => segs.iter().find(|x| x.pos == departure).copied(),
             _ => None,
         }
-    })?;
-    if u.start_at < d.end_at {
-        return None;
-    }
-    let area_ratio = match (p.area(u), p.area(&d)) {
-        (Some(a), Some(b)) if b > 0. => Some(a / b),
-        _ => None,
-    };
-    Some(VersusDeparture {
-        new_high: u.end_price > side_price(&d, Direction::Up),
-        area_ratio,
     })
 }
 

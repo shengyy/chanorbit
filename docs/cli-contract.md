@@ -245,7 +245,7 @@ Cut at `2026-01-06T22:00:00`, before the new low, the same series answers `"stag
 }
 ```
 
-`sell` has the same shape on both stages: `turned` when the middle level's top fractal at `U`'s high is confirmed (the only stage without the leaf level), `triggered` when the leaf completion is confirmed there, with `leaf`, `mid_divergent`, `mid_lower_high`, `parent_complete` and `parent_vs_departure` (`{"new_high": true, "area_ratio": 0.2231}` or `null`).
+`sell` has the same shape on both stages: `turned` when the middle level's top fractal at `U`'s high is confirmed (the only stage without the leaf level), `triggered` when the leaf completion is confirmed there, with `leaf`, `mid_divergent`, `mid_lower_high`, `parent_complete`, `parent_departure` (`{"start_at": "2026-01-08T02:00:00", "end_at": "2026-01-08T06:00:00", "high": 104.01}` or `null`) and `parent_vs_departure` (`{"new_high": true, "area_ratio": 0.2231}`, or `null` without `parent_departure` or while the parent's latest up element is that departure).
 
 `down_end` has the shape below on every stage; from another synthetic series (a 30m centre left downward by the unfinished segment, its 5m move completing at the low and the 1m move diverging inside the last 5m segment), areas shortened:
 
