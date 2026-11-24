@@ -9,7 +9,7 @@ use crate::macd::{MacdSeries, PARAMS, macd_series};
 use crate::signal::{Buy, LevelRead, ParentDeparture, Stage, buy, parent_departure};
 use crate::signal_down::{DownEnd, ParentDown, down_end, parent_down};
 use crate::signal_sell::{
-    ParentFacts, Sell, Support, VersusDeparture, mid_centres, mid_support, parent_complete, sell,
+    ParentFacts, ParentUp, Sell, Support, mid_centres, mid_support, parent_complete, sell,
     versus_departure,
 };
 use chrono::NaiveDateTime;
@@ -57,7 +57,7 @@ pub struct Observed {
 /// state.
 #[derive(Default)]
 struct Memo {
-    parent: Option<(usize, Option<ParentDeparture>, Option<VersusDeparture>)>,
+    parent: Option<(usize, Option<ParentDeparture>, ParentUp)>,
     parent_down: Option<(usize, Option<ParentDown>)>,
     centres: Option<(usize, Vec<Centre>)>,
     parent_complete: Option<((usize, usize), bool)>,
@@ -74,8 +74,8 @@ fn evaluate(levels: &[Analyzer], macd: &[MacdSeries], memo: &mut Memo) -> Signal
     if memo.parent.as_ref().is_none_or(|x| x.0 != lens.0) {
         memo.parent = Some((lens.0, parent_departure(p), versus_departure(p)));
     }
-    let (dep, versus) = match &memo.parent {
-        Some((_, dep, versus)) => (dep.as_ref(), *versus),
+    let (dep, up) = match &memo.parent {
+        Some((_, dep, up)) => (dep.as_ref(), *up),
         None => unreachable!("set above"),
     };
     if memo.parent_down.as_ref().is_none_or(|x| x.0 != lens.0) {
@@ -91,7 +91,7 @@ fn evaluate(levels: &[Analyzer], macd: &[MacdSeries], memo: &mut Memo) -> Signal
     let centres = &memo.centres.as_ref().expect("set above").1;
     let parent = ParentFacts {
         complete: memo.parent_complete.expect("set above").1,
-        versus_departure: versus,
+        up,
     };
     Signals {
         buy: buy(p, m, l, dep),
